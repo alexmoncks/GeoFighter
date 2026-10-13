@@ -44,6 +44,12 @@ cmd_op:     ds 1
 
 ; ---- the match
 cam_x:      ds 2            ; the camera's x: between the two fighters
+dv_ring:    ds 6            ; where the ring is, seen by the camera: -cam_x * KVEC
+dv_ft0:     ds 6            ; ... and each fighter: (x - cam_x) * KVEC
+dv_ft1:     ds 6
+kv_d:       ds 2            ; kvec's work
+kv_p:       ds 2
+orb_i:      ds 1            ; frame of the opening shot
 gm_state:   ds 1            ; GS_*
 gm_timer:   ds 1
 gm_demo:    ds 1            ; 1: the machine plays both

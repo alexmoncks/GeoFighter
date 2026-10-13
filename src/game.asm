@@ -5,24 +5,24 @@
 ;
 ; A frame (30 a second: a page is shown for at least two vertical blanks):
 ;   frame_begin   waits for the page drawn before to be on show, then starts
-;                 the sky and the ground of the hidden page (four fills)
+;                 the floor around the ring on the hidden page (one fill)
 ;   logic         one tick of the round, while the V9968 fills
 ;   hud_bars      the life bars, when they changed
 ;   scene_draw    the ring and the fighters (geo3d), then geo_wait
 ;   msg_draw      the message, over the picture
 ;   frame_end     asks for the page to be shown at the next blank
+;
+; A round opens with the camera circling the ring once and closing in on
+; the two fighters, who stand at their marks (GS_ORBIT: ORBIT_N frames from
+; the table of tools/gen_fighter.py). Its last frame is the fight camera's.
 ; ============================================================================
 
-GS_INTRO:   equ 0               ; the fighters walk in
+GS_ORBIT:   equ 0               ; the opening shot
 GS_READY:   equ 1               ; ROUND 1
 GS_GO:      equ 2               ; FIGHT!
 GS_FIGHT:   equ 3
 GS_KO:      equ 4               ; one of them is down
 GS_WIN:     equ 5               ; the winner's pose
-
-START_X:    equ 236             ; where they come in from
-MARK_X:     equ 64              ; where they stop
-CAM_MAX:    equ 104             ; the camera stays this close to the middle
 
 game_run:
         call wait_ce
@@ -37,7 +37,7 @@ gr_1:   call frame_begin
         call geo_wait
         call msg_draw
         call frame_end
-        ; a new press of the trigger in the demo: play; RETURN: the title
+        ; the trigger in the demo: player 1 takes over; RETURN: the title
         ld a, (gm_demo)
         or a
         jr z, gr_2
@@ -46,10 +46,12 @@ gr_1:   call frame_begin
         jr z, gr_2
         xor a
         ld (gm_demo), a
+        ld (ft0 + FT_CPU), a
+        ld (ft0 + FT_INTENT), a
         ld a, 0xFF
         ld (in_prev), a
-        call round_init
-        jr gr_1
+        ld a, SFX_BELL
+        call sfx_play
 gr_2:   ld a, (in_cur)
         rlca                        ; IN_START
         jr nc, gr_1
@@ -61,19 +63,10 @@ frame_begin:
 fb_work:                            ; (the tests time a frame's work from here to frame_end)
         ld a, (buf)
         ld (txt_page), a
-        ld hl, bg_boxes
-        ld b, 4
-fb_1:   push bc
-        call box
-        pop bc
-        djnz fb_1
-        ret
+        ld hl, bg_box
+        jp box
 
-bg_boxes:                           ; x, y, width (0 = 256), height, colour
-        db 0, VIEW_Y0, 0, (HORIZON - VIEW_Y0) / 3, COL_SKY0
-        db 0, VIEW_Y0 + (HORIZON - VIEW_Y0) / 3, 0, (HORIZON - VIEW_Y0) / 3, COL_SKY1
-        db 0, VIEW_Y0 + 2 * ((HORIZON - VIEW_Y0) / 3), 0, HORIZON - VIEW_Y0 - 2 * ((HORIZON - VIEW_Y0) / 3), COL_SKY2
-        db 0, HORIZON, 0, 212 - HORIZON, COL_GROUND
+bg_box: db 0, VIEW_Y0, 0, 212 - VIEW_Y0, COL_GROUND     ; x, y, width (0 = 256), height, colour
 
 frame_end:
         ld hl, (st_frames)
@@ -124,15 +117,17 @@ fl_2:   ld a, (buf)
         ret
 
 ; ---------------------------------------------------------------- the round
+; the fighters at their marks, in the stance, and the opening shot's
+; vertices in geo3d
 round_init:
         ld ix, ft0
-        ld hl, -START_X
+        ld hl, -MARK_X
         xor a
         call ri_one
         ld a, (gm_demo)
         ld (ft0 + FT_CPU), a
         ld ix, ft1
-        ld hl, START_X
+        ld hl, MARK_X
         ld a, 1
         call ri_one
         ld a, 1
@@ -140,9 +135,12 @@ round_init:
         xor a
         ld (gm_state), a
         ld (gm_msg), a
+        ld (orb_i), a
         ld a, 2
         ld (hud_dirty), a
-        ret
+        call lg_cam
+        ld a, 1
+        jp geo_vtx
 ; IX -> fighter, HL = x, A = slot (its facing and its character)
 ri_one: ld (ix + FT_X), l
         ld (ix + FT_X + 1), h
@@ -154,14 +152,14 @@ ri_one: ld (ix + FT_X), l
         ld (ix + FT_INTENT), a
         ld (ix + FT_AIT), a
         ld (ix + FT_AICMD), a
-        ld a, AN_WALK_F
+        ld a, AN_IDLE
         jp anim_force
 
 ; one tick
 logic:
         ld a, (gm_state)
         or a
-        jp z, lg_intro
+        jp z, lg_orbit
         dec a
         jp z, lg_ready
         dec a
@@ -172,25 +170,27 @@ logic:
         jp z, lg_ko
         jp lg_win
 
-; the walk in: forwards until the mark
-lg_intro:
-        ld ix, ft0
-        ld de, SPEED_F
-        call ft_move
-        ld ix, ft1
-        ld de, SPEED_F
-        call ft_move
-        call both_update
-        ld hl, (ft1 + FT_X)
-        ld de, MARK_X + 1
-        call lt_s
-        jp nc, lg_cam
-        ld ix, ft0
-        ld a, AN_IDLE
-        call anim_force
-        ld ix, ft1
-        ld a, AN_IDLE
-        call anim_force
+; the opening shot: the next frame of the table; a new press of the
+; trigger cuts it short. After the last frame the fight's vertices go in.
+lg_orbit:
+        ld a, (in_cur)
+        ld c, a
+        ld a, (in_prev)
+        cpl
+        and c
+        ld b, a                     ; keys pressed since the last tick
+        ld a, c
+        ld (in_prev), a
+        ld hl, orb_i
+        inc (hl)
+        bit IN_A, b
+        jr z, lo_1
+        ld (hl), ORBIT_N
+lo_1:   ld a, (hl)
+        cp ORBIT_N
+        ret c
+        xor a
+        call geo_vtx
         ld a, GS_READY
         ld b, 40
         ld c, MSG_ROUND
@@ -263,7 +263,9 @@ lf_3:   ld a, b
         ld c, MSG_KO
         jp lg_next
 
-; the camera: half way between the two, inside the ring
+; the camera: it slides along the ring to stay half way between the two.
+; What the scene needs from it: where the ring and each fighter are, seen
+; by the camera (three vectors, 9 multiplies a frame).
 lg_cam: ld hl, (ft0 + FT_X)
         ld de, (ft1 + FT_X)
         add hl, de
@@ -272,7 +274,24 @@ lg_cam: ld hl, (ft0 + FT_X)
         ld de, CAM_MAX
         call clamp_s
         ld (cam_x), hl
-        ret
+        call neg_hl
+        ex de, hl                   ; the ring: -cam_x
+        ld hl, dv_ring
+        call kvec
+        ld hl, (ft0 + FT_X)
+        ld de, (cam_x)
+        or a
+        sbc hl, de
+        ex de, hl
+        ld hl, dv_ft0
+        call kvec
+        ld hl, (ft1 + FT_X)
+        ld de, (cam_x)
+        or a
+        sbc hl, de
+        ex de, hl
+        ld hl, dv_ft1
+        jp kvec
 
 lg_ko:  call both_update
         call lg_count
@@ -296,8 +315,7 @@ lk_1:   ld (ix + FT_STATE), ST_WIN
 lg_win: call both_update
         call lg_count
         jp nz, lg_cam
-        call round_init
-        jp lg_cam
+        jp round_init
 
 ; the state's timer: Z when it runs out
 lg_count:

@@ -11,7 +11,7 @@
 ;   bank 0   page 1 (4000h-7FFFh), fixed: all the code, the animation table,
 ;            the sounds
 ;   bank 1   page 2 (8000h-BFFFh) at boot: the palette, the vertices and the
-;            faces of the scene
+;            faces of the scene, the opening shot (its vertices, its camera)
 ;   bank 2+  the poses: one bank per character and facing, POSE_BYTES per pose
 ; Ports come from out/ports.asm (build.sh): PORT_BASE 98h (openMSX: the
 ; V9968 is the machine's VDP) or 88h (the V9968 cartridge next to the
@@ -20,14 +20,16 @@
 ; The picture: SCREEN 8 (256 x 212, 1 byte a pixel) with the V9968's
 ; extended palette (256 entries of 15 bits), two pages flipped in the
 ; vertical blank, 30 frames a second. Rows 0..19 are the status bar; the 3D
-; view is rows 20..211. Every frame the hidden page gets
-;   1. the sky and the ground: four HMMV fills
+; view is rows 20..211, seen from above and at an angle. Every frame the
+; hidden page gets
+;   1. the floor around the ring: one HMMV fill
 ;   2. the ring: one geo3d RUN
 ;   3. the two fighters: a resident scene (geo.asm), one transform-only RUN
 ;      for each body part and a last RUN that sorts and paints every face
 ;   4. a message, when there is one: LMMM + TIMP
-; The poses are worked out on the PC (tools/gen_fighter.py): the Z80 does no
-; 3D arithmetic, it adds each fighter's X to 22 translations.
+; A round opens with the camera circling the ring once and closing in.
+; The poses and that camera path are worked out on the PC
+; (tools/gen_fighter.py): the Z80's 3D arithmetic is 9 multiplies a frame.
 ; ============================================================================
 
         include "out/ports.asm"         ; PORT_BASE (build.sh)
@@ -194,8 +196,12 @@ bank0_end:
         org 0x8000
 palette:
         incbin "out/palette.bin"
-models:
+models:                             ; the fight's vertices, then the faces
         incbin "out/models.bin"
+vtx_intro:                          ; the opening shot's vertices
+        incbin "out/vtx_intro.bin"
+orbit_tab:                          ; ... and its camera, ORBIT_REC bytes a frame
+        incbin "out/orbit.bin"
 bank1_end:
         ds 0xC000 - $, 0xFF
 

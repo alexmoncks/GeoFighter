@@ -5,23 +5,29 @@
 
 Everything the Z80 would otherwise compute is worked out here:
 
-- The fighters are rigs of rigid parts (boxes). A pose is a set of joint
-  angles; forward kinematics gives each part its rotation and origin.
-- The camera never turns, so for every pose, facing and part the complete
-  geo3d configuration (matrix C * F * P in Q2.14 and the translation) is
-  stored ready to send: 24 bytes. The Z80 only adds the fighter's X.
-- The normals are stored already in camera space for the stance, because the
-  resident scene (VECTOR RAID's engine.md, 6.3) lights every face in the one
-  RUN that draws them all.
+- The fighters are rigs of rigid parts. A pose is a set of joint angles;
+  forward kinematics gives each part its rotation and origin.
+- In a fight the camera never turns (it only slides along the ring), so for
+  every pose, facing and part the complete geo3d configuration (matrix
+  C0 * F * P in Q2.14 and the translation) is stored ready to send: 24
+  bytes. The Z80 adds the fighter's position along the ring times one
+  constant vector.
+- The opening shot circles the ring once and closes in. Nothing moves in it
+  but the camera, so the fighters are stored a second time with their
+  vertices already in the world (the stance, at their marks) and each frame
+  is ONE camera record for the whole scene.
+- All normals are stored in the fight camera's space; the light register is
+  set so that every RUN lights the faces the same way (see light()).
 
-Writes out/inc/const.asm, out/inc/tables.asm, out/models.bin, out/palette.bin,
-out/pose_<char>_<facing>.bin and out/gen.json (for tools/preview.py).
+Writes out/inc/const.asm, out/inc/tables.asm, out/models.bin (fight
+vertices, then the faces), out/vtx_intro.bin, out/orbit.bin,
+out/palette.bin, out/pose_<char>_<facing>.bin and out/gen.json (for
+tools/preview.py).
 """
 import json
 import math
 import os
 import struct
-import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "out")
@@ -31,17 +37,22 @@ Q = 16384
 VIEW_Y0 = 20            # rows 0..19 are the status bar
 G3_W, G3_H = 256, 192
 G3_F = 360
-G3_CX, G3_CY = 128, 138
+G3_CX, G3_CY = 128, 104 # where the camera's target lands in the view
 G3_ZNEAR = 16
-CAM_Y = 95.0            # eye height
-CAM_D = 520.0           # distance to the fighters' plane (z = 0)
-CAM_PITCH = 8.0         # degrees, looking down
-LIGHT = (-0.45, 0.70, -0.55)    # towards the light, camera space
-RING_X = 300            # half width of the ring
-RING_Z0, RING_Z1 = -130, 170
-RING_H = 14             # height of the platform above the ground
-WALK_X = 250            # the fighters' x stays inside +-WALK_X
+TARGET = (0.0, 62.0, 0.0)       # what the camera looks at: the fighters' waists
+CAM_YAW = 28.0          # the fight camera: turned to see the ring at an angle
+CAM_PITCH = 24.0        # ... from above
+CAM_DIST = 560.0
+ORBIT_N = 120           # frames of the opening shot (4 seconds)
+ORBIT_DIST = 1150.0     # where it starts: far
+ORBIT_PITCH = 38.0      # ... and high
+LIGHT_W = (-0.35, 0.80, -0.48)  # towards the light, in the world
+RING = 240              # half the side of the (square) ring
+RING_H = 20             # height of the platform
+WALK_X = 190            # the fighters' x stays inside +-WALK_X
+MARK_X = 64             # where they stand when the round starts
 MIN_SEP = 72            # they never stand closer than this (the guards touch)
+CAM_MAX = 96            # how far the fight camera slides to follow them
 
 # ------------------------------------------------------------------ maths
 def rad(a):
@@ -92,46 +103,75 @@ def s16(x):
     assert -32768 <= v <= 32767, v
     return v
 
-# The camera: x right, y up, z into the screen (geo3d's frame), pitched down.
-_p = rad(CAM_PITCH)
-CAM = [[1, 0, 0],
-       [0, math.cos(_p), math.sin(_p)],
-       [0, -math.sin(_p), math.cos(_p)]]
-FACING = [IDENT, rot_y(180)]    # 0: looks right (+x), 1: looks left
+def camera(yaw, pitch, dist):
+    """-> (C, position): geo3d's frame is x right, y up, z into the screen.
+    The rows of C are the camera's right, up and forward in the world."""
+    cy, sy, cp, sp = math.cos(rad(yaw)), math.sin(rad(yaw)), math.cos(rad(pitch)), math.sin(rad(pitch))
+    fwd = [sy * cp, -sp, cy * cp]
+    c = [[cy, 0.0, -sy], [sy * sp, cp, cy * sp], fwd]
+    return c, [TARGET[i] - dist * fwd[i] for i in range(3)]
+
+C0, CAM0 = camera(CAM_YAW, CAM_PITCH, CAM_DIST)
+KVEC = [C0[0][0], C0[1][0], C0[2][0]]       # one unit along the world's x, seen by the fight camera
+LIGHT0 = mvec(C0, norm(LIGHT_W))            # the light in the fight camera's space
+FACING = [IDENT, rot_y(180)]                # 0: looks right (+x), 1: looks left
+
+def light(rot):
+    """The light register for a RUN whose matrix is `rot`. geo3d lights a
+    face with transpose(rot) * register against the stored normal, and the
+    normals are stored in the fight camera's space: the register is rot * LIGHT0."""
+    return [q14(v) for v in mvec(rot, LIGHT0)]
 
 # ------------------------------------------------------------------ models
-# A part is a list of prisms in the part's own frame (origin at its joint):
-# x forward, y up, z to the fighter's left. A prism is a box whose top and
-# bottom rectangles may differ; `cols` gives the colour ramp of its faces
-# in the order bottom, top, front (+x), back (-x), left (+z), right (-z).
-def prism(y0, y1, b, t, cols, bx=0.0, tx=0.0):
-    (hx0, hz0), (hx1, hz1) = b, t
-    v = [(bx - hx0, y0, -hz0), (bx + hx0, y0, -hz0), (bx + hx0, y0, hz0), (bx - hx0, y0, hz0),
-         (tx - hx1, y1, -hz1), (tx + hx1, y1, -hz1), (tx + hx1, y1, hz1), (tx - hx1, y1, hz1)]
-    f = [(0, 1, 2, 3), (4, 5, 6, 7), (1, 2, 6, 5), (0, 3, 7, 4), (3, 2, 6, 7), (0, 1, 5, 4)]
-    if not isinstance(cols, (list, tuple)):
-        cols = [cols] * 6
-    return {"v": [list(p) for p in v], "f": [list(q) for q in f], "c": list(cols)}
+# A part is made of pieces in the part's own frame (origin at its joint):
+# x forward, y up, z to the fighter's left.
+def tube(rings, sides, caps):
+    """Stacked rectangles sharing their vertices: rings = [(y, hx, hz, cx)]
+    from the bottom up; sides = one colour per segment, or [front, back,
+    left, right]; caps = (bottom, top) colours, None for no cap."""
+    v = []
+    for y, hx, hz, cx in rings:
+        v += [[cx - hx, y, -hz], [cx + hx, y, -hz], [cx + hx, y, hz], [cx - hx, y, hz]]
+    f = []
+    for s in range(len(rings) - 1):
+        a, b = 4 * s, 4 * s + 4
+        col = sides[s] if isinstance(sides[s], (list, tuple)) else [sides[s]] * 4
+        axis = [(rings[s][3] + rings[s + 1][3]) / 2.0, (rings[s][0] + rings[s + 1][0]) / 2.0, 0.0]
+        f += [([a + 1, a + 2, b + 2, b + 1], col[0], axis), ([a, a + 3, b + 3, b], col[1], axis),
+              ([a + 3, a + 2, b + 2, b + 3], col[2], axis), ([a, a + 1, b + 1, b], col[3], axis)]
+    top = 4 * (len(rings) - 1)
+    mid = [sum(r[3] for r in rings) / len(rings), (rings[0][0] + rings[-1][0]) / 2.0, 0.0]
+    if caps[0] is not None:
+        f.append(([0, 1, 2, 3], caps[0], mid))
+    if caps[1] is not None:
+        f.append(([top, top + 1, top + 2, top + 3], caps[1], mid))
+    return v, f
 
-def build_part(prisms):
-    """-> vertices, faces (4 indices, wound clockwise seen from outside), normals, colours"""
+def wedge(x0, x1, xt, y0, y1, hz, col):
+    """A foot: the sole from x0 to x1 at y0, rising to an edge at (xt, y1)."""
+    v = [[x0, y0, -hz], [x1, y0, -hz], [x1, y0, hz], [x0, y0, hz], [xt, y1, -hz], [xt, y1, hz]]
+    mid = [sum(p[i] for p in v) / 6.0 for i in range(3)]
+    f = [([0, 1, 2, 3], col, mid), ([0, 3, 5, 4], col, mid), ([1, 2, 5, 4], col, mid),
+         ([3, 2, 5, 5], col, mid), ([0, 1, 4, 4], col, mid)]
+    return v, f
+
+def build_part(pieces):
+    """-> vertices, faces (4 indices, clockwise seen from outside; a triangle
+    repeats its last vertex), unit normals, colours"""
     verts, faces, normals, cols = [], [], [], []
-    for pr in prisms:
+    for v, f in pieces:
         base = len(verts)
-        cen = [sum(p[i] for p in pr["v"]) / 8.0 for i in range(3)]
-        verts += pr["v"]
-        for f, c in zip(pr["f"], pr["c"]):
-            if c is None:
-                continue                    # a face nobody can see
-            p = [pr["v"][i] for i in f]
+        verts += v
+        for idx, col, ref in f:
+            p = [v[i] for i in idx]
             n = cross(vsub(p[1], p[0]), vsub(p[2], p[0]))
             fc = [sum(q[i] for q in p) / 4.0 for i in range(3)]
-            if dot(n, vsub(fc, cen)) < 0:
-                f = [f[0], f[3], f[2], f[1]]
+            if dot(n, vsub(fc, ref)) < 0:
+                idx = [idx[0], idx[2], idx[1], idx[1]] if idx[2] == idx[3] else [idx[0], idx[3], idx[2], idx[1]]
                 n = [-n[0], -n[1], -n[2]]
-            faces.append([base + i for i in f])
+            faces.append([base + i for i in idx])
             normals.append(norm(n))
-            cols.append(c)
+            cols.append(col)
     return verts, faces, normals, cols
 
 PARTS = ["pelvis", "torso", "head", "uarm_l", "farm_l", "uarm_r", "farm_r",
@@ -139,34 +179,42 @@ PARTS = ["pelvis", "torso", "head", "uarm_l", "farm_l", "uarm_r", "farm_r",
 NPARTS = len(PARTS)
 
 def make_character(spec):
-    """spec: sizes and colour ramps -> {"parts": {name: (v, f, n, c)}, "joints": {...}}"""
     w = spec.get("bulk", 1.0)
     c = spec["col"]
     leg_t, leg_s = spec.get("thigh", 42.0), spec.get("shin", 40.0)
     arm_u, arm_f = spec.get("uarm", 28.0), spec.get("farm", 27.0)
-    torso_h = spec.get("torso", 46.0)
+    th = spec.get("torso", 46.0)
     sh_z = 19.0 * w
     hip_z = 8.5 * w
     parts = {}
-    parts["pelvis"] = build_part([prism(-12, 9, (9 * w, 11 * w), (10 * w, 13 * w), c["pelvis"])])
-    parts["torso"] = build_part([prism(0, torso_h, (9.5 * w, 12.5 * w), (11.5 * w, sh_z + 1), c["torso"], tx=1.0)])
-    hd = c["head"]
-    parts["head"] = build_part([prism(1, 27, (7.5, 7.0), (9.5, 8.5), hd, bx=1.0, tx=1.0)])
-    for s, z in (("l", 1), ("r", -1)):
-        parts["uarm_" + s] = build_part([prism(-arm_u, 2, (5.0 * w, 5.0 * w), (6.2 * w, 6.2 * w), c["uarm"])])
-        # one prism, wider at the fist; the cap at the fist has the fist's colour
-        fa = c["farm"]
-        parts["farm_" + s] = build_part([prism(-arm_f - 3, 1, (5.8 * w, 5.8 * w), (4.6 * w, 4.6 * w),
-                                               [c["fist"], fa, fa, fa, fa, fa])])
-        parts["thigh_" + s] = build_part([prism(-leg_t, 3, (6.5 * w, 6.2 * w), (8.5 * w, 7.5 * w), c["thigh"])])
+    parts["pelvis"] = build_part([tube([(-12, 9 * w, 11 * w, 0), (9, 10 * w, 13 * w, 0)],
+                                       [c["pelvis"]], (c["pelvis"], c["pelvis"]))])
+    # the waist, the ribs, the chest (the deepest), the shoulders (the widest)
+    parts["torso"] = build_part([tube(
+        [(0, 9.5 * w, 12.0 * w, 0.0), (7, 9.8 * w, 12.6 * w, 0.5),
+         (th * 0.66, 12.5 * w, 16.0 * w, 2.5), (th, 9.0 * w, sh_z + 1.5, 1.0)],
+        [c["belt"], c["torso"], c["torso"]], (c["belt"], c["torso"]))])
+    # the jaw, the cheeks, the crown
+    parts["head"] = build_part([tube(
+        [(1, 6.0, 5.6, 2.0), (11, 9.2, 8.4, 1.2), (27, 8.0, 7.6, 0.4)],
+        [c["jaw"], c["face"]], (c["skin"], c["crown"]))])
+    for s in ("l", "r"):
+        parts["uarm_" + s] = build_part([tube(
+            [(-arm_u, 5.0 * w, 5.0 * w, 0), (2, 6.5 * w, 6.5 * w, 0)], [c["uarm"]], (c["uarm"], c["uarm"]))])
+        # the fist (wide), the wrist (thin), the elbow
+        parts["farm_" + s] = build_part([tube(
+            [(-arm_f - 4, 6.0 * w, 6.0 * w, 0), (-arm_f + 7, 4.2 * w, 4.2 * w, 0), (1, 5.4 * w, 5.4 * w, 0)],
+            [c["fist"], c["farm"]], (c["fist"], c["farm"]))])
+        parts["thigh_" + s] = build_part([tube(
+            [(-leg_t, 6.5 * w, 6.2 * w, 0), (3, 8.8 * w, 7.8 * w, 0)], [c["thigh"]], (c["thigh"], c["thigh"]))])
         parts["shin_" + s] = build_part([
-            prism(-leg_s, 2, (5.0 * w, 4.8 * w), (6.3 * w, 6.0 * w), c["shin"]),
-            prism(-leg_s - 7, -leg_s, (10.5, 5.5 * w), (10.5, 5.5 * w), c["foot"], bx=5.0, tx=5.0)])
+            tube([(-leg_s, 4.8 * w, 4.6 * w, 0), (2, 6.6 * w, 6.2 * w, 0)], [c["shin"]], (c["shin"], c["shin"])),
+            wedge(-7.0, 17.0, 0.0, -leg_s - 7, -leg_s + 2, 5.4 * w, c["foot"])])
     joints = {                      # the joint of each part in its parent's frame
         "torso": ("pelvis", (0, 9, 0)),
-        "head": ("torso", (1, torso_h, 0)),
-        "uarm_l": ("torso", (1, torso_h - 5, sh_z + 4.5 * w)),
-        "uarm_r": ("torso", (1, torso_h - 5, -(sh_z + 4.5 * w))),
+        "head": ("torso", (1, th, 0)),
+        "uarm_l": ("torso", (1, th - 5, sh_z + 4.5 * w)),
+        "uarm_r": ("torso", (1, th - 5, -(sh_z + 4.5 * w))),
         "farm_l": ("uarm_l", (0, -arm_u, 0)),
         "farm_r": ("uarm_r", (0, -arm_u, 0)),
         "thigh_l": ("pelvis", (0, -9, hip_z)),
@@ -184,30 +232,31 @@ RAMPS = {
 RAMP_RGB = {                       # the brightest tone, 0..31 per channel
     "skin": (31, 22, 15), "gi": (31, 31, 30), "black": (9, 9, 12), "hair": (12, 7, 3),
     "skin2": (24, 15, 9), "blue": (6, 13, 31), "red": (31, 6, 5), "boot": (28, 24, 6),
-    "tile_a": (22, 24, 27), "tile_b": (13, 16, 22), "skirt": (20, 6, 6), "gold": (31, 26, 4),
+    "tile_a": (23, 25, 28), "tile_b": (12, 15, 22), "skirt": (22, 5, 5), "gold": (31, 26, 4),
 }
 FIXED = {                          # single colours
-    0: (0, 0, 0), 1: (31, 31, 31), 2: (4, 9, 20), 3: (7, 14, 26), 4: (11, 19, 29),
-    5: (5, 12, 7), 6: (31, 29, 0), 7: (31, 4, 2), 104: (3, 3, 5), 105: (16, 17, 19),
-    106: (0, 26, 8), 107: (31, 16, 0),
+    0: (0, 0, 0), 1: (31, 31, 31), 5: (3, 7, 9), 6: (31, 29, 0), 7: (31, 4, 2),
+    104: (3, 3, 5), 105: (16, 17, 19), 106: (0, 26, 8), 107: (31, 16, 0),
 }
-COL_BLACK, COL_WHITE, COL_SKY0, COL_SKY1, COL_SKY2, COL_GROUND = 0, 1, 2, 3, 4, 5
+COL_BLACK, COL_WHITE, COL_GROUND = 0, 1, 5
 COL_YELLOW, COL_RED, COL_BARBG, COL_FRAME, COL_GREEN, COL_ORANGE = 6, 7, 104, 105, 106, 107
 
 def R(name):
     return RAMPS[name]
 
+SK, HR, BK = R("skin"), R("hair"), R("black")
+S2 = R("skin2")
 CHARS = [
     {"name": "RAI", "bulk": 1.0,
-     "col": {"pelvis": R("black"), "torso": R("gi"), "skin": R("skin"),
-             # bottom, top, front, back, left, right: hair on top and behind
-             "head": [R("skin"), R("hair"), R("skin"), R("hair"), R("skin"), R("skin")],
-             "uarm": R("gi"), "farm": R("skin"), "fist": R("skin"),
-             "thigh": R("gi"), "shin": R("gi"), "foot": R("skin")}},
+     "col": {"pelvis": R("gi"), "belt": BK, "torso": R("gi"), "skin": SK,
+             # sides are front, back, left, right: the hair behind and on the sides
+             "jaw": SK, "face": [SK, HR, HR, HR], "crown": HR,
+             "uarm": R("gi"), "farm": SK, "fist": SK,
+             "thigh": R("gi"), "shin": R("gi"), "foot": SK}},
     {"name": "DAGO", "bulk": 1.22, "thigh": 40.0, "shin": 38.0, "torso": 48.0,
-     "col": {"pelvis": R("blue"), "torso": R("skin2"), "skin": R("skin2"),
-             "head": R("skin2"),
-             "uarm": R("skin2"), "farm": R("skin2"), "fist": R("red"),
+     "col": {"pelvis": R("blue"), "belt": R("gold"), "torso": S2, "skin": S2,
+             "jaw": [BK, S2, BK, BK], "face": S2, "crown": S2,       # a beard, no hair
+             "uarm": S2, "farm": S2, "fist": R("red"),
              "thigh": R("blue"), "shin": R("red"), "foot": R("boot")}},
 ]
 
@@ -331,52 +380,36 @@ ANIM_ORDER = ["idle", "walk_f", "walk_b", "punch", "kick", "guard", "blockhit", 
 REC = 24                           # bytes per part: 9 matrix words, 3 translation words
 POSE_BYTES = REC * NPARTS
 
-# ------------------------------------------------------------------ the floor
-def build_floor():
-    nx, nz = 6, 2
-    xs = [-RING_X + i * (2 * RING_X) / nx for i in range(nx + 1)]
-    zs = [RING_Z0 + j * (RING_Z1 - RING_Z0) / nz for j in range(nz + 1)]
-    verts = [[x, 0.0, z] for z in zs for x in xs]
+# ------------------------------------------------------------------ the ring
+def build_ring():
+    """a square platform: 2 x 2 tiles on top, a skirt on each side"""
+    xs = [-RING, 0, RING]
+    verts = [[x, 0.0, z] for z in xs for x in xs]
     faces, normals, cols = [], [], []
-    for j in range(nz):
-        for i in range(nx):
-            a = j * (nx + 1) + i
-            f = [a, a + 1, a + nx + 2, a + nx + 1]
-            p = [verts[k] for k in f]
-            if cross(vsub(p[1], p[0]), vsub(p[2], p[0]))[1] < 0:
-                f = [f[0], f[3], f[2], f[1]]
-            faces.append(f)
-            normals.append([0.0, 1.0, 0.0])
-            cols.append(R("tile_a") if (i + j) % 2 == 0 else R("tile_b"))
+    def add(f, n, col):
+        p = [verts[k] for k in f]
+        if dot(cross(vsub(p[1], p[0]), vsub(p[2], p[0])), n) < 0:
+            f = [f[0], f[3], f[2], f[1]]
+        faces.append(f); normals.append(n); cols.append(col)
+    for j in range(2):
+        for i in range(2):
+            a = j * 3 + i
+            add([a, a + 1, a + 4, a + 3], [0.0, 1.0, 0.0], R("tile_a") if (i + j) % 2 == 0 else R("tile_b"))
     b = len(verts)
-    verts += [[-RING_X, -RING_H, RING_Z0], [RING_X, -RING_H, RING_Z0]]
-    f = [0, nx, b + 1, b]                   # the front of the platform
-    p = [verts[k] for k in f]
-    if cross(vsub(p[1], p[0]), vsub(p[2], p[0]))[2] > 0:
-        f = [f[0], f[3], f[2], f[1]]
-    faces.append(f)
-    normals.append([0.0, 0.0, -1.0])
-    cols.append(R("skirt"))
+    verts += [[-RING, -RING_H, -RING], [RING, -RING_H, -RING], [RING, -RING_H, RING], [-RING, -RING_H, RING]]
+    add([0, 2, b + 1, b], [0.0, 0.0, -1.0], R("skirt"))
+    add([2, 8, b + 2, b + 1], [1.0, 0.0, 0.0], R("skirt"))
+    add([8, 6, b + 3, b + 2], [0.0, 0.0, 1.0], R("skirt"))
+    add([6, 0, b, b + 3], [-1.0, 0.0, 0.0], R("skirt"))
     return verts, faces, normals, cols
 
 # ------------------------------------------------------------------ output
-def cam_t(o):
-    """translation for a part whose origin is o in the world, camera at x = 0"""
-    return mvec(CAM, [o[0], o[1] - CAM_Y, o[2] + CAM_D])
+def record(rot, t):
+    return [q14(rot[i][j]) for i in range(3) for j in range(3)] + [s16(t[0]), s16(t[1]), s16(t[2])]
 
-def pose_record(ch, p):
-    """-> 2 facings x NPARTS x (9 matrix words, 3 translation words)"""
-    sol = solve(ch, p)
-    out = []
-    for f in (0, 1):
-        recs = []
-        for part in PARTS:
-            r, o = sol[part]
-            m = mmul(CAM, mmul(FACING[f], r))
-            t = cam_t(mvec(FACING[f], o))
-            recs.append([q14(m[i][j]) for i in range(3) for j in range(3)] + [s16(t[0]), s16(t[1]), s16(t[2])])
-        out.append(recs)
-    return out, sol
+def smooth(t):
+    t = max(0.0, min(1.0, t))
+    return t * t * (3.0 - 2.0 * t)
 
 def main():
     os.makedirs(os.path.join(OUT, "inc"), exist_ok=True)
@@ -392,47 +425,50 @@ def main():
         poses += plist
     assert len(poses) * POSE_BYTES <= 16384, "the poses of a facing must fit one bank"
 
-    gen = {"view": {"W": G3_W, "H": G3_H, "F": G3_F, "CX": G3_CX, "CY": G3_CY, "ZNEAR": G3_ZNEAR,
-                    "Y0": VIEW_Y0, "light": norm(LIGHT)},
-           "chars": [], "poses": len(poses), "anims": anim_steps, "parts": PARTS}
-
-    # ---- vertex and face streams: fighter 0, fighter 1, the floor (highest,
-    # so its RUN transforms every vertex and a hide RUN can put all of them
-    # behind the near plane)
-    vstream, ranges = [], []           # ranges[slot][part] = (first, end)
+    # ---- vertex and face streams: fighter 0, fighter 1, the ring (the
+    # highest, so a RUN of the fighters' vertices leaves it alone). The
+    # faces: the ring's first, so a RUN of NFACE_RING faces draws only it.
+    vfight, vintro, ranges = [], [], []     # ranges[slot][part] = (first, end)
     fighter_faces = []
-    stance_sol = None
+    marks = [-MARK_X, MARK_X]
     for slot, ch in enumerate(chars):
         sol = solve(ch, STANCE)
         rr, ff = [], []
         for part in PARTS:
             v, f, n, c = ch["parts"][part]
-            first = len(vstream)
-            vstream += v
-            rr.append((first, len(vstream)))
-            rest = mmul(CAM, mmul(FACING[slot], sol[part][0]))     # slot 0 looks right, slot 1 left
+            first = len(vfight)
+            vfight += v
+            rot, org = sol[part]
+            for p in v:                      # the same vertex in the world, in the stance
+                wv = mvec(FACING[slot], vadd(mvec(rot, p), org))
+                vintro.append([wv[0] + marks[slot], wv[1], wv[2]])
+            rr.append((first, len(vfight)))
+            rest = mmul(C0, mmul(FACING[slot], rot))     # slot 0 looks right, slot 1 left
             for fi, ni, ci in zip(f, n, c):
                 ff.append(([first + i for i in fi], mvec(rest, ni), ci))
         ranges.append(rr)
         fighter_faces.append(ff)
-    fv, ff_, fn, fc = build_floor()
-    floor_first = len(vstream)
-    vstream += fv
-    nvert = len(vstream)
-    floor_faces = [([floor_first + i for i in f], n, c) for f, n, c in zip(ff_, fn, fc)]
-    all_faces = floor_faces + fighter_faces[0] + fighter_faces[1]     # the floor first: its RUN draws faces 0..NF-1
+    nv_fight = len(vfight)
+    rv, rf, rn, rc = build_ring()
+    vfight += rv
+    vintro += rv
+    nvert = len(vfight)
+    ring_faces = [([nv_fight + i for i in f], mvec(C0, n), c) for f, n, c in zip(rf, rn, rc)]
+    all_faces = ring_faces + fighter_faces[0] + fighter_faces[1]
     assert nvert <= 255 and len(all_faces) <= 255, (nvert, len(all_faces))
 
-    vbin = b"".join(struct.pack("<3h", s16(x), s16(y), s16(z)) for x, y, z in vstream)
+    pack_v = lambda vs: b"".join(struct.pack("<3h", s16(x), s16(y), s16(z)) for x, y, z in vs)
+    vbin = pack_v(vfight)
     fbin = b""
     for idx, n, c in all_faces:
         fbin += bytes(idx) + struct.pack("<3h", q14(n[0]), q14(n[1]), q14(n[2])) + bytes([c])
     with open(os.path.join(OUT, "models.bin"), "wb") as f:
         f.write(vbin + fbin)
+    with open(os.path.join(OUT, "vtx_intro.bin"), "wb") as f:
+        f.write(pack_v(vintro))
 
     # ---- the palette: 256 x (R, G, B), 5 bits each
     pal = [(0, 0, 0)] * 256
-    pal = list(pal)
     for k, rgb in FIXED.items():
         pal[k] = rgb
     for name, basei in RAMPS.items():
@@ -443,58 +479,69 @@ def main():
     with open(os.path.join(OUT, "palette.bin"), "wb") as f:
         f.write(bytes(v for rgb in pal for v in rgb))
 
-    # ---- pose records: one file per character and facing (one bank each)
+    # ---- pose records: one file per character and facing (one bank each).
+    # The fighter stands at x = 0 here; the Z80 adds x * KVEC.
     sols = []
     for ci, ch in enumerate(chars):
         data = [b"", b""]
-        chsol = []
+        chrec = []
         for p in poses:
-            recs, sol = pose_record(ch, p)
-            chsol.append(recs)
+            sol = solve(ch, p)
+            both = []
             for f in (0, 1):
-                for rec in recs[f]:
+                recs = []
+                for part in PARTS:
+                    rot, org = sol[part]
+                    rec = record(mmul(C0, mmul(FACING[f], rot)), mvec(C0, vsub(mvec(FACING[f], org), CAM0)))
+                    recs.append(rec)
                     data[f] += struct.pack("<12h", *rec)
+                both.append(recs)
+            chrec.append(both)
         for f in (0, 1):
             with open(os.path.join(OUT, "pose_%d_%d.bin" % (ci, f)), "wb") as fo:
                 fo.write(data[f])
-        sols.append(chsol)
+        sols.append(chrec)
 
-    # ---- the floor's own matrix (the camera) and translation
-    ft = cam_t([0.0, 0.0, 0.0])
-    floor_rec = [q14(CAM[i][j]) for i in range(3) for j in range(3)] + [s16(ft[0]), s16(ft[1]), s16(ft[2])]
+    # ---- the ring in a fight: the camera's own matrix
+    ring_rec = record(C0, mvec(C0, [-CAM0[0], -CAM0[1], -CAM0[2]]))
 
-    L = norm(LIGHT)
+    # ---- the opening shot: one turn around the ring, closing in and coming
+    # down, ending exactly on the fight camera. Per frame: the camera record
+    # (the vertices are in the world) and the light register.
+    orbit, orbit_bin = [], b""
+    for i in range(ORBIT_N):
+        t = (i + 1) / ORBIT_N
+        yaw = CAM_YAW - 360.0 * (1.0 - smooth(t))
+        z = smooth((t - 0.30) / 0.70)
+        c, pos = camera(yaw, ORBIT_PITCH + (CAM_PITCH - ORBIT_PITCH) * z, ORBIT_DIST + (CAM_DIST - ORBIT_DIST) * z)
+        rec = record(c, mvec(c, [-pos[0], -pos[1], -pos[2]]))
+        lg = light(c)
+        orbit.append((rec, lg))
+        orbit_bin += struct.pack("<15h", *(rec + lg))
+    assert orbit[-1][0] == ring_rec, "the opening shot must end on the fight camera"
+    with open(os.path.join(OUT, "orbit.bin"), "wb") as f:
+        f.write(orbit_bin)
+
+    lr = light(C0)
+    l0 = [q14(v) for v in LIGHT0]
     with open(os.path.join(OUT, "inc", "const.asm"), "w") as f:
         w = lambda s: f.write(s + "\n")
         w("; generated by tools/gen_fighter.py")
         w("ROM_BANKS:   equ 8")
         w("POSE_BANK0:  equ 2               ; + 2 * character + facing")
-        w("G3_W:        equ %d" % G3_W)
-        w("G3_H:        equ %d" % G3_H)
-        w("G3_F:        equ %d" % G3_F)
-        w("G3_CX:       equ %d" % G3_CX)
-        w("G3_CY:       equ %d" % G3_CY)
-        w("G3_ZNEAR:    equ %d" % G3_ZNEAR)
-        w("VIEW_Y0:     equ %d" % VIEW_Y0)
-        w("HORIZON:     equ %d             ; screen row of the horizon" % (VIEW_Y0 + int(round(G3_CY - G3_F * math.tan(_p)))))
-        w("NVERT_ALL:   equ %d" % nvert)
-        w("NFACE_ALL:   equ %d" % len(all_faces))
-        w("NFACE_FLOOR: equ %d" % len(floor_faces))
-        w("NPARTS:      equ %d" % NPARTS)
-        w("POSE_REC:    equ %d             ; bytes per part" % REC)
-        w("POSE_BYTES:  equ %d            ; bytes per pose" % POSE_BYTES)
-        w("VTX_BYTES:   equ %d" % len(vbin))
-        w("FACE_BYTES:  equ %d" % len(fbin))
-        w("LIGHT_X:     equ %d" % q14(L[0]))
-        w("LIGHT_Y:     equ %d" % q14(L[1]))
-        w("LIGHT_Z:     equ %d" % q14(L[2]))
-        w("WALK_X:      equ %d" % WALK_X)
-        w("MIN_SEP:     equ %d" % MIN_SEP)
-        for k, v in (("COL_BLACK", COL_BLACK), ("COL_WHITE", COL_WHITE), ("COL_SKY0", COL_SKY0),
-                     ("COL_SKY1", COL_SKY1), ("COL_SKY2", COL_SKY2), ("COL_GROUND", COL_GROUND),
+        for k, v in (("G3_W", G3_W), ("G3_H", G3_H), ("G3_F", G3_F), ("G3_CX", G3_CX), ("G3_CY", G3_CY),
+                     ("G3_ZNEAR", G3_ZNEAR), ("VIEW_Y0", VIEW_Y0), ("NVERT_ALL", nvert), ("NVERT_FIGHT", nv_fight),
+                     ("NFACE_ALL", len(all_faces)), ("NFACE_RING", len(ring_faces)), ("NPARTS", NPARTS),
+                     ("POSE_REC", REC), ("POSE_BYTES", POSE_BYTES), ("VTX_BYTES", len(vbin)),
+                     ("FACE_BYTES", len(fbin)), ("ORBIT_N", ORBIT_N), ("ORBIT_REC", 30),
+                     ("KVEC_X", q14(KVEC[0])), ("KVEC_Y", q14(KVEC[1])), ("KVEC_Z", q14(KVEC[2])),
+                     ("LIGHT_X", l0[0]), ("LIGHT_Y", l0[1]), ("LIGHT_Z", l0[2]),
+                     ("LRING_X", lr[0]), ("LRING_Y", lr[1]), ("LRING_Z", lr[2]),
+                     ("WALK_X", WALK_X), ("MARK_X", MARK_X), ("MIN_SEP", MIN_SEP), ("CAM_MAX", CAM_MAX),
+                     ("COL_BLACK", COL_BLACK), ("COL_WHITE", COL_WHITE), ("COL_GROUND", COL_GROUND),
                      ("COL_YELLOW", COL_YELLOW), ("COL_RED", COL_RED), ("COL_BARBG", COL_BARBG),
                      ("COL_FRAME", COL_FRAME), ("COL_GREEN", COL_GREEN), ("COL_ORANGE", COL_ORANGE)):
-            w("%s:%s equ %d" % (k, " " * (12 - len(k)), v))
+            w("%s:%s equ %d" % (k, " " * max(1, 12 - len(k)), v))
         for i, name in enumerate(ANIM_ORDER):
             w("AN_%s:%s equ %d" % (name.upper(), " " * (9 - len(name)), i))
         for name, mv in MOVES.items():
@@ -505,13 +552,12 @@ def main():
     with open(os.path.join(OUT, "inc", "tables.asm"), "w") as f:
         w = lambda s: f.write(s + "\n")
         w("; generated by tools/gen_fighter.py")
-        w("; the end of each part's vertex range, per slot, in drawing (RUN) order:")
-        w("; the highest range first")
+        w("; the end of each part's vertex range, per slot")
         for slot in (0, 1):
             w("part_end_%d:" % slot)
             w("        db " + ", ".join(str(ranges[slot][i][1]) for i in range(NPARTS)))
-        w("floor_rec:")
-        w("        dw " + ", ".join(str(v) for v in floor_rec))
+        w("ring_rec:")
+        w("        dw " + ", ".join(str(v) for v in ring_rec))
         w("; animations: first pose, steps, ticks per step, mode (0 loop, 1 once, 2 hold, 3 loop the last 4)")
         w("anim_tab:")
         modes = {"loop": 0, "once": 1, "hold": 2, "loopend": 3}
@@ -520,19 +566,19 @@ def main():
             w("        db %d, %d, %d, %d      ; %s" % (first, n, ticks, modes[mode], name))
 
     # ---- everything the preview needs
-    gen["nvert"], gen["nface"], gen["nface_floor"] = nvert, len(all_faces), len(floor_faces)
-    gen["vstream"] = [[s16(c) for c in v] for v in vstream]
-    gen["faces"] = [[idx, [q14(x) for x in n], c] for idx, n, c in all_faces]
-    gen["ranges"] = ranges
-    gen["floor_rec"] = floor_rec
-    gen["pose_recs"] = sols                     # [char][pose][facing][part] -> 12 words
-    gen["palette"] = pal
-    gen["cols"] = {"sky": [COL_SKY0, COL_SKY1, COL_SKY2], "ground": COL_GROUND}
-    gen["horizon"] = VIEW_Y0 + int(round(G3_CY - G3_F * math.tan(_p)))
+    gen = {"view": {"W": G3_W, "H": G3_H, "F": G3_F, "CX": G3_CX, "CY": G3_CY, "ZNEAR": G3_ZNEAR, "Y0": VIEW_Y0},
+           "light0": l0, "light_ring": lr, "kvec": [q14(v) for v in KVEC],
+           "poses": len(poses), "anims": anim_steps, "parts": PARTS,
+           "nvert": nvert, "nv_fight": nv_fight, "nface": len(all_faces), "nface_ring": len(ring_faces),
+           "vfight": [[s16(c) for c in v] for v in vfight], "vintro": [[s16(c) for c in v] for v in vintro],
+           "faces": [[idx, [q14(x) for x in n], c] for idx, n, c in all_faces],
+           "ranges": ranges, "ring_rec": ring_rec, "pose_recs": sols, "orbit": orbit,
+           "palette": pal, "ground": COL_GROUND}
     with open(os.path.join(OUT, "gen.json"), "w") as f:
         json.dump(gen, f)
-    print("gen_fighter: %d vertices, %d faces (%d floor), %d poses (%d bytes each), %d animations" %
-          (nvert, len(all_faces), len(floor_faces), len(poses), POSE_BYTES, len(ANIM_ORDER)))
+    per = [sum(len(ch["parts"][p][0]) for p in PARTS) for ch in chars], [sum(len(ch["parts"][p][1]) for p in PARTS) for ch in chars]
+    print("gen_fighter: %d vertices, %d faces (fighters %s vertices, %s faces; ring %d, %d), %d poses, %d orbit frames" %
+          (nvert, len(all_faces), per[0], per[1], len(rv), len(ring_faces), len(poses), ORBIT_N))
 
 if __name__ == "__main__":
     main()

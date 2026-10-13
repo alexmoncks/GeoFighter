@@ -2,13 +2,15 @@
 
 Jogo de luta 3D para MSX com o V9968 e o coprocessador geo3d, no estilo do Virtua Fighter: lutadores de polígonos sombreados num ringue 3D. O plano é ter 6 personagens e 8 cenários.
 
-Este repositório está na fase do **demo de teste**: dois personagens (RAI e DAGO) entram no ringue e lutam.
+Este repositório está na fase do **demo de teste**: dois personagens (RAI e DAGO) lutam num ringue visto em diagonal e de cima, depois de a câmera dar uma volta completa em torno dele.
+
+![Giro](docs/giro1.png) ![Giro](docs/giro2.png)
 
 ![Luta](docs/luta.png) ![Vitória](docs/vitoria.png)
 
 ## O que o demo faz
 
-- Título, entrada dos dois lutadores no ringue, "ROUND 1", "FIGHT!", luta, nocaute, pose de vitória, novo round.
+- Título, giro de 360° da câmera em volta do ringue até fechar nos lutadores, "ROUND 1", "FIGHT!", luta, nocaute, pose de vitória, novo round.
 - Jogador 1 no teclado ou no joystick 1 contra a máquina. Sem apertar nada no título, a máquina joga contra si mesma.
 - Golpes: soco e chute. Defesa bloqueia os dois. Barras de vida no alto.
 - 30 quadros por segundo, com som de golpe, defesa e queda no PSG.
@@ -23,7 +25,7 @@ Este repositório está na fase do **demo de teste**: dois personagens (RAI e DA
 | Defesa | C ou cursor para baixo | para baixo |
 | Voltar ao título | RETURN | |
 
-No demo automático, ESPAÇO ou o botão A passa o controle do RAI para você.
+No demo automático, ESPAÇO ou o botão A passa o controle do RAI para você. Durante o giro de abertura, um novo toque em ESPAÇO ou no botão A pula direto para a luta.
 
 ## Como rodar
 
@@ -48,14 +50,16 @@ Para ver as poses sem emulador:
 ```sh
 cd tools
 python3 preview.py sheet 0              # out/preview_sheet0.png: todas as poses do personagem 0
-python3 preview.py scene 0 0 -70 70     # out/preview_scene.png: um quadro com os dois
+python3 preview.py scene 0 0 -64 64     # out/preview_scene.png: um quadro da luta com os dois
+python3 preview.py orbit 12             # out/preview_orbit.png: 12 quadros do giro de abertura
 ```
 
 ## Testes
 
 ```sh
 bash tests/run_tests.sh                 # boot, demo e play
-bash tests/run_tests.sh prof            # quadros por segundo e tempo de cada etapa
+bash tests/run_tests.sh skip            # o toque que corta o giro de abertura
+bash tests/run_tests.sh prof proforbit  # quadros por segundo e tempo de cada etapa, na luta e no giro
 SHOT=1 bash tests/run_tests.sh shots    # capturas de tela em out/test/shots
 PROFILE=88 MACHINE=Philips_NMS_8250 bash tests/run_tests.sh play
 ```
@@ -66,7 +70,7 @@ Os testes dirigem o openMSX pelo `tests/run.tcl`: seguram teclas, esperam quadro
 
 | Item | Situação |
 |---|---|
-| Emulador, perfil 98h | funciona, 30 quadros por segundo, 13 ms de trabalho por quadro |
+| Emulador, perfil 98h | funciona, 30 quadros por segundo, 15 ms de trabalho por quadro na luta e 7 ms no giro |
 | Emulador, perfil 88h | funciona (testado num MSX2 com o cartucho emulado) |
 | Cartucho real | ainda não testado |
 | Raspberry Pi | ainda não testado |

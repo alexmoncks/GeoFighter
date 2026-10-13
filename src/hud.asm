@@ -324,6 +324,8 @@ ts_1:   ld a, (in_cur)
 ts_play:
         xor a
         ld (gm_demo), a
+        ld a, 0xFF
+        ld (in_prev), a             ; the trigger still held does not cut the opening shot
         ld a, SFX_BELL
         jp sfx_play
 

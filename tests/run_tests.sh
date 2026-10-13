@@ -35,19 +35,23 @@ esac
 
 script_of() {
   case $1 in
-    boot)
-      echo "wait 1;log title;expect gm_demo == 0;wait 7;log demo;expect gm_demo == 1;expect st_geo == 1;expect16 st_frames > 2;wait 3;log walked in;expect16 st_frames > 60" ;;
-    demo)     # the title (6 s), the walk in and two rounds at most
-      echo "wait 12;log fight;expect gm_state == 3;wait 25;log later;expect16 st_frames > 600;wait 40;log end;expect st_geo == 1" ;;
+    boot)     # the title, then the demo starts by itself with the opening shot
+      echo "wait 1;log title;expect gm_demo == 0;wait 7;log demo;expect gm_demo == 1;expect st_geo == 1;expect16 st_frames > 2;expect gm_state == 0;wait 7;log fight;expect gm_state == 3" ;;
+    demo)     # the title (6 s), the opening shot (4 s) and two rounds at most
+      echo "wait 15;log fight;expect gm_state == 3;wait 25;log later;expect16 st_frames > 600;wait 40;log end;expect st_geo == 1" ;;
     play)     # the trigger at the title: player 1 against the machine
       # (ft1+14 = 0: the other fighter stands still)
-      echo "wait 3;tap 16;wait 0.5;expect gm_demo == 0;poke ft1+14 0;wait 5;log fight;expect gm_state == 3;poke ft1+14 0;poke ft1+8 0;keys 8;wait 1.2;keys 0;log walked;expect16 ft0 > 65400;tap 16;wait 0.5;log punched;expect ft1+2 == 91;tap 32;wait 0.8;log kicked;expect ft1+2 == 77;keys 64;wait 0.4;expect ft0+4 == 5;keys 0;wait 0.3;keys 4;wait 0.5;keys 0;log back;expect16 ft0 < 65500" ;;
-    prof)
-      echo "wait 12;prof 10;log prof" ;;
+      echo "wait 3;tap 16;wait 0.5;expect gm_demo == 0;expect gm_state == 0;poke ft1+14 0;wait 7;log fight;expect gm_state == 3;keys 8;wait 1.2;keys 0;log walked;expect16 ft0 > 65400;tap 16;wait 0.5;log punched;expect ft1+2 == 91;tap 32;wait 0.8;log kicked;expect ft1+2 == 77;keys 64;wait 0.4;expect ft0+4 == 5;keys 0;wait 0.3;keys 4;wait 0.5;keys 0;log back;expect16 ft0 < 65500" ;;
+    skip)     # a new press of the trigger cuts the opening shot short
+      echo "wait 3;tap 16;wait 1;expect gm_state == 0;tap 16;wait 0.3;log cut;expect gm_state >= 1" ;;
+    prof)     # the fight, then (proforbit) the opening shot
+      echo "wait 15;prof 8;log prof" ;;
+    proforbit)
+      echo "wait 6.6;prof 3.3;log orbit" ;;
     title)    # the title's text is in VRAM and on show
       echo "wait 2.5;shot title;vram 40 44 24;vram 0 0 4;log title" ;;
     shots)
-      echo "wait 3;shot title;wait 5;shot walk_in;wait 2;shot round;wait 1.5;shot fight0;wait 1;shot fight1;wait 1;shot fight2;wait 1;shot fight3;wait 2;shot fight4;wait 3;shot fight5;wait 4;shot fight6;poke ft1+2 1;wait 2.5;shot ko;wait 2.5;shot win" ;;
+      echo "wait 3;shot title;wait 3.3;shot orbit0;wait 0.25;shot orbit1;wait 0.25;shot orbit2;wait 0.25;shot orbit3;wait 0.25;shot orbit4;wait 0.25;shot orbit5;wait 0.25;shot orbit6;wait 0.6;shot round;wait 2;shot fight0;wait 1.5;shot fight1;wait 2;shot fight2;wait 3;shot fight3;poke ft1+2 1;wait 1.6;shot ko;wait 1.6;shot win" ;;
     *) echo "unknown scenario $1" >&2; exit 2 ;;
   esac
 }
