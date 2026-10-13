@@ -13,7 +13,9 @@
 ; and a face with a vertex behind the near plane is skipped.
 ;
 ; A frame of the fight (scene_draw):
-;   1. the ring: NVERT = all, NFACE = NFACE_RING, the camera's matrix.
+;   1. the ring: NVERT = all, NFACE = NFACE_RING, the camera's matrix with
+;      the ring turned as the fight's axis is (gm_axis: a sidestep turns
+;      it; one matrix and its light for each of the AXIS_N notches).
 ;   2. a hide RUN: NFACE = 0 and TZ behind the near plane. Every vertex is
 ;      now hidden, the ring's too.
 ;   3. one transform-only RUN (NFACE = 0) for each body part: its matrix and
@@ -100,8 +102,6 @@ geo_r40:
         db 0, 0, 0, 0, 15, 0, 0, 0
 ident_rec:
         dw 16384, 0, 0, 0, 16384, 0, 0, 0, 16384, 0, 0, 0
-light_ring:                         ; for a RUN with the fight camera's matrix
-        dw LRING_X, LRING_Y, LRING_Z
 light_id:                           ; for a RUN with the identity
         dw LIGHT_X, LIGHT_Y, LIGHT_Z
 
@@ -133,7 +133,8 @@ geo_rec:
         out (GEO_IDX), a
         ld bc, 18 * 256 + GEO_DAT
         otir                        ; the matrix
-        ld b, 3
+; HL -> TX, TY, TZ, DE -> 3 words added to them: the translation, and RUN
+geo_tr: ld b, 3
 gre_1:  ld a, (de)
         inc de
         add a, (hl)
@@ -212,15 +213,40 @@ scene_draw:
         ld a, (gm_state)
         or a
         jp z, scene_orbit           ; GS_ORBIT
-        ; 1. the ring
-        ld hl, light_ring
+        ; 1. the ring, turned as the fight's axis is: its matrix and light
+        ; from the table, its translation worked out with the camera's
+        ld a, 1
+        ld (BANK2_SEL), a
+        ld a, (gm_axis)
+        ld l, a
+        ld h, 0
+        add hl, hl
+        add hl, hl
+        add hl, hl                  ; * 8
+        ld e, l
+        ld d, h
+        add hl, hl                  ; * 16
+        add hl, de                  ; * 24
+        ld de, ring_tab
+        add hl, de
+        push hl
+        ld de, 18
+        add hl, de
         call geo_light
         ld a, NFACE_RING
         call geo_nface
-        ld hl, ring_rec
-        ld de, dv_ring
+        ld a, 0x42
+        out (GEO_IDX), a
         ld a, NVERT_ALL
-        call geo_rec
+        out (GEO_DAT), a
+        xor a
+        out (GEO_IDX), a
+        pop hl
+        ld bc, 18 * 256 + GEO_DAT
+        otir                        ; the matrix
+        ld hl, ring_t0
+        ld de, dv_ring
+        call geo_tr
         ; 2. hide everything
         call scene_hide
         ; 3. the parts: fighter 1, then fighter 0
@@ -287,14 +313,23 @@ so_last:
 ; IX -> fighter, IY -> the end of its last part's vertex range, DE -> its
 ; place along the ring as a vector (dv_ft0, dv_ft1)
 scene_fighter:
+        ; the bank: two per character and facing, POSES_BANK poses in each
         ld a, (ix + FT_CHAR)
         add a, a
         add a, (ix + FT_FACING)
+        add a, a
         add a, POSE_BANK0
+        ld c, a
+        ld a, (ix + FT_POSE)
+        cp POSES_BANK
+        jr c, sfi_0
+        sub POSES_BANK
+        inc c
+sfi_0:  ld l, a
+        ld a, c
         ld (BANK2_SEL), a
         push de
         ; the pose's last record: 8000h + pose * POSE_BYTES + (NPARTS - 1) * POSE_REC
-        ld l, (ix + FT_POSE)
         ld h, 0
         ld e, l
         ld d, h

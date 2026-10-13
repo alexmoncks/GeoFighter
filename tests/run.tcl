@@ -7,7 +7,8 @@
 #      OUTDIR, SHOT (1: a window and screenshots),
 #      SCRIPT: steps separated by ";"
 #   keys MASK         hold keys through dbg_in: 1 up 2 down 4 left 8 right
-#                     16 punch 32 kick 64 guard 128 RETURN
+#                     16 punch 32 kick 64 guard 128 RETURN (up: the jump,
+#                     down: the crouch)
 #   tap MASK          the same for 0.1 s, then released
 #   frames N          wait until the game has shown N more frames
 #   wait SECONDS      emulated seconds
@@ -42,7 +43,7 @@ proc say {s} { puts $::log "[t] $s" }
 proc finish {} { say END; close $::log; exit }
 
 proc status {} {
-  set s "frames=[rd16 st_frames] state=[rd gm_state] demo=[rd gm_demo] msg=[rd gm_msg] cam=[rds16 cam_x] geo=[rd st_geo]"
+  set s "frames=[rd16 st_frames] state=[rd gm_state] demo=[rd gm_demo] msg=[rd gm_msg] cam=[rds16 cam_x] axis=[rd gm_axis] geo=[rd st_geo]"
   foreach f {ft0 ft1} {
     append s " $f: x=[rds16 $f] hp=[rd $f 2] st=[rd $f 3] an=[rd $f 4] pose=[rd $f 7]"
   }

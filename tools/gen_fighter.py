@@ -16,12 +16,17 @@ Everything the Z80 would otherwise compute is worked out here:
   but the camera, so the fighters are stored a second time with their
   vertices already in the world (the stance, at their marks) and each frame
   is ONE camera record for the whole scene.
+- A sidestep turns the fight's axis. The fighters are still drawn along
+  the same line with the same pose records: it is the ring that is drawn
+  turned under them, with one matrix (and its light) for each of the
+  AXIS_N notches of a full turn.
 - All normals are stored in the fight camera's space; the light register is
   set so that every RUN lights the faces the same way (see light()).
 
 Writes out/inc/const.asm, out/inc/tables.asm, out/models.bin (fight
 vertices, then the faces), out/vtx_intro.bin, out/orbit.bin,
-out/palette.bin, out/pose_<char>_<facing>.bin and out/gen.json (for
+out/ring_tab.bin, out/palette.bin, out/pose_<char>_<facing>_<half>.bin
+(POSES_BANK poses, a 16 KB bank, in each half) and out/gen.json (for
 tools/preview.py).
 """
 import json
@@ -53,6 +58,9 @@ WALK_X = 190            # the fighters' x stays inside +-WALK_X
 MARK_X = 64             # where they stand when the round starts
 MIN_SEP = 72            # they never stand closer than this (the guards touch)
 CAM_MAX = 96            # how far the fight camera slides to follow them
+AXIS_N = 128            # steps of a full turn of the fight's axis (the ring turns under the fighters)
+STEP_TURN = 8           # ... and how many a sidestep takes: 22.5 degrees
+POSES_BANK = 62         # poses in a 16 KB bank
 
 # ------------------------------------------------------------------ maths
 def rad(a):
@@ -261,8 +269,8 @@ CHARS = [
 ]
 
 # ------------------------------------------------------------------ poses
-# A pose: root (dx forward, lift, lean rz, twist ry, roll rx) and one (rx, ry,
-# rz) per joint. A limb hangs along -y: rz > 0 swings it forward. The torso
+# A pose: root (dx forward, lift, lean rz, twist ry, roll rx, dz to the left)
+# and one (rx, ry, rz) per joint. A limb hangs along -y: rz > 0 swings it forward. The torso
 # and the head point up: rz < 0 leans them forward.
 JOINTS = ["pelvis", "torso", "head", "sh_l", "el_l", "sh_r", "el_r", "hip_l", "kn_l", "hip_r", "kn_r"]
 JOINT_OF = {"pelvis": "pelvis", "torso": "torso", "head": "head", "uarm_l": "sh_l", "farm_l": "el_l",
@@ -270,7 +278,7 @@ JOINT_OF = {"pelvis": "pelvis", "torso": "torso", "head": "head", "uarm_l": "sh_
             "thigh_r": "hip_r", "shin_r": "kn_r"}
 
 def pose(base=None, **kw):
-    p = {"root": [0.0, 0.0, 0.0, 22.0, 0.0], "air": None}
+    p = {"root": [0.0, 0.0, 0.0, 22.0, 0.0, 0.0], "air": None}
     for j in JOINTS:
         p[j] = [0.0, 0.0, 0.0]
     if base:
@@ -302,11 +310,11 @@ def seq(keys, steps):
 
 def solve(ch, p):
     """forward kinematics -> {part: (R, origin)} in the fighter's frame (x forward)"""
-    dx, lift, lean, twist, roll = p["root"]
+    dx, lift, lean, twist, roll, dz = p["root"]
     r_root = mmul(rot_y(twist), mmul(rot_z(lean), rot_x(roll)))
     res = {}
     jr = lambda j: mmul(rot_y(p[j][1]), mmul(rot_x(p[j][0]), rot_z(p[j][2])))
-    res["pelvis"] = (mmul(r_root, jr("pelvis")), [dx, 0.0, 0.0])
+    res["pelvis"] = (mmul(r_root, jr("pelvis")), [dx, 0.0, dz])
     for part in PARTS[1:]:
         par, off = ch["joints"][part]
         pr, po = res[par]
@@ -318,7 +326,7 @@ def solve(ch, p):
 
 # The stance: a bladed guard, the left side ahead (the far side when looking right).
 STANCE = pose(
-    root=(0, 0, 0, 24, 0),
+    root=(0, 0, 0, 24, 0, 0),
     pelvis=(0, 0, 4), torso=(0, 6, -10), head=(0, -8, 6),
     sh_l=(0, 0, 58), el_l=(0, 0, 78), sh_r=(-8, 0, 22), el_r=(0, 0, 112),
     hip_l=(4, 0, 30), kn_l=(0, 0, -34), hip_r=(-4, 0, -16), kn_r=(0, 0, -26))
@@ -371,12 +379,78 @@ def build_anims():
               sh_r=(-10, 0, 168), el_r=(0, 0, 14), hip_l=(6, 0, 6), kn_l=(0, 0, -4), hip_r=(-6, 0, -4), kn_r=(0, 0, -4))
     v2 = pose(v1, sh_r=(-10, 0, 150), el_r=(0, 0, 60))
     A["win"] = (seq([s, v1, v2, v1], [3, 2, 2]), 3, "loopend")
+
+    # crouch: low behind the guard, for as long as down is held
+    cr = pose(s, torso=(0, 4, -22), head=(0, -4, 16), sh_l=(6, 0, 70), el_l=(0, 0, 118),
+              sh_r=(-6, 0, 62), el_r=(0, 0, 122), hip_l=(6, 0, 92), kn_l=(0, 0, -128),
+              hip_r=(-6, 0, 58), kn_r=(0, 0, -132))
+    A["crouch"] = (seq([s, cr], [2]), 2, "hold")
+    A["cblock"] = ([pose(cr, root=(-6, 0, 0, 24, 0, 0), torso=(0, 4, -14)), cr, cr], 2, "once")
+    # low punch: the lead hand, from the crouch
+    lp = pose(cr, root=(6, 0, 0, 10, 0, 0), torso=(0, -14, -26), head=(0, 10, 18),
+              sh_l=(0, 0, 84), el_l=(0, 0, 6))
+    A["lowp"] = (seq([cr, lp, lp, cr], [2, 1, 2]), 2, "once")
+    # sweep: the rear leg along the floor
+    sw = pose(cr, root=(4, 0, 0, -8, 0, 0), torso=(0, 10, -6), head=(0, -10, 8),
+              hip_r=(-10, 0, 96), kn_r=(0, 0, -4), hip_l=(6, 0, 100), kn_l=(0, 0, -140),
+              sh_r=(-20, 0, -30), el_r=(0, 0, 40), sh_l=(0, 0, 40), el_l=(0, 0, 100))
+    A["sweep"] = (seq([cr, sw, sw, cr], [3, 1, 3]), 2, "once")
+    # jump: 3 steps on the ground (a second tap of up turns them into a
+    # sidestep), 5 in the air, 2 landing. The air attacks keep these heights.
+    s0 = pose(s, air=0)
+    ja = pose(s0, torso=(0, 4, -18), hip_l=(4, 0, 52), kn_l=(0, 0, -74), hip_r=(-4, 0, 12), kn_r=(0, 0, -72),
+              sh_l=(0, 0, 30), el_l=(0, 0, 60), sh_r=(-8, 0, -10), el_r=(0, 0, 70))
+    ju = pose(s0, torso=(0, 4, -4), sh_l=(0, 0, 90), el_l=(0, 0, 50), sh_r=(-8, 0, 70), el_r=(0, 0, 60),
+              hip_l=(4, 0, 30), kn_l=(0, 0, -50), hip_r=(-4, 0, 10), kn_r=(0, 0, -40))
+    jt = pose(s0, torso=(0, 4, -12), sh_l=(0, 0, 70), el_l=(0, 0, 80), sh_r=(-8, 0, 40), el_r=(0, 0, 100),
+              hip_l=(4, 0, 74), kn_l=(0, 0, -104), hip_r=(-4, 0, 54), kn_r=(0, 0, -100))
+    jd = pose(s0, torso=(0, 4, -8), sh_l=(0, 0, 60), el_l=(0, 0, 70), sh_r=(-8, 0, 30), el_r=(0, 0, 90),
+              hip_l=(4, 0, 34), kn_l=(0, 0, -44), hip_r=(-4, 0, 6), kn_r=(0, 0, -30))
+    heights = [26, 50, 60, 50, 26]
+    def arc(mid):
+        """mid: the 5 poses in the air"""
+        return ([s0, lerp(s0, ja, 0.6), ja] + [pose(m, air=h) for m, h in zip(mid, heights)] +
+                [ja, lerp(ja, s0, 0.5)])
+    A["jump"] = (arc([ju, jt, jt, jt, jd]), 2, "once")
+    # flying kick: the rear leg out and down
+    jk = pose(jt, torso=(0, 4, 16), head=(0, -6, -10), hip_r=(-4, 0, 72), kn_r=(0, 0, -4),
+              hip_l=(4, 0, 64), kn_l=(0, 0, -114), sh_r=(-16, 0, -20), el_r=(0, 0, 50))
+    A["jkick"] = (arc([ju, lerp(jt, jk, 0.6), jk, jk, lerp(jk, jd, 0.5)]), 2, "once")
+    # the punch from above: the rear fist straight down at the head
+    jp = pose(jt, torso=(0, -16, -24), head=(0, 12, 20), sh_r=(-4, 0, 64), el_r=(0, 0, 6),
+              sh_l=(0, 0, 30), el_l=(0, 0, 110))
+    A["jpunch"] = (arc([ju, lerp(jt, jp, 0.6), jp, jp, lerp(jp, jd, 0.5)]), 2, "once")
+    # sidestep, to the fighter's left and to its right: out and back while
+    # the ring turns under the two
+    def side(d):
+        a, b = ("hip_l", "hip_r") if d > 0 else ("hip_r", "hip_l")
+        s1 = pose(s, root=(0, 0, 0, 24, 0, 16 * d), torso=(6 * d, 6, -12))
+        s1[a][0] -= 24 * d
+        s1[b][0] -= 6 * d
+        s2 = pose(s, root=(0, 0, 0, 24, 0, 30 * d), torso=(-4 * d, 6, -10))
+        s2[a][0] -= 8 * d
+        s2[b][0] += 14 * d
+        return seq([s, s1, s2, s1, s], [1, 1, 1, 1])
+    A["step_l"] = (side(1), 2, "once")
+    A["step_r"] = (side(-1), 2, "once")
     return A
 
-# the moves the game logic knows: the step whose first tick hits, reach, damage
-MOVES = {"punch": {"hit_step": 3, "reach": 86, "damage": 9},
-         "kick": {"hit_step": 4, "reach": 102, "damage": 14}}
-ANIM_ORDER = ["idle", "walk_f", "walk_b", "punch", "kick", "guard", "blockhit", "hit", "ko", "win"]
+# The moves the game logic knows, in the order of their numbers: animation,
+# the step whose first tick hits, reach, damage, height.
+#   high   goes over a crouch; a standing guard stops it
+#   mid    either guard stops it
+#   low    misses a fighter in the air; only the crouching guard stops it
+#   over   (from the air) only the standing guard stops it
+LEVELS = {"high": 0, "mid": 1, "low": 2, "over": 3}
+MOVES = [("punch", "punch", 3, 86, 9, "high"), ("kick", "kick", 4, 102, 14, "mid"),
+         ("lowp", "lowp", 2, 82, 6, "low"), ("sweep", "sweep", 3, 104, 12, "low"),
+         ("jkick", "jkick", 6, 104, 16, "over"), ("jpunch", "jpunch", 6, 88, 12, "over")]
+ANIM_ORDER = ["idle", "walk_f", "walk_b", "punch", "kick", "guard", "blockhit", "hit", "ko", "win",
+              "crouch", "cblock", "lowp", "sweep", "jump", "jkick", "jpunch", "step_l", "step_r"]
+# what an animation means to an attack that lands on it: 1 crouching, 2 the
+# standing guard, 4 the crouching guard
+ANIM_FLAGS = {"guard": 2, "blockhit": 2, "crouch": 1 | 4, "cblock": 1 | 4, "lowp": 1, "sweep": 1}
+JUMP_AIR0, JUMP_AIR1 = 3, 7        # the steps of a jump that are in the air
 REC = 24                           # bytes per part: 9 matrix words, 3 translation words
 POSE_BYTES = REC * NPARTS
 
@@ -423,7 +497,7 @@ def main():
         plist, ticks, mode = anims[name]
         anim_steps[name] = (len(poses), len(plist), ticks, mode)
         poses += plist
-    assert len(poses) * POSE_BYTES <= 16384, "the poses of a facing must fit one bank"
+    assert POSES_BANK * POSE_BYTES <= 16384 and len(poses) <= 2 * POSES_BANK, len(poses)
 
     # ---- vertex and face streams: fighter 0, fighter 1, the ring (the
     # highest, so a RUN of the fighters' vertices leaves it alone). The
@@ -479,7 +553,8 @@ def main():
     with open(os.path.join(OUT, "palette.bin"), "wb") as f:
         f.write(bytes(v for rgb in pal for v in rgb))
 
-    # ---- pose records: one file per character and facing (one bank each).
+    # ---- pose records: two files (two banks of POSES_BANK poses) per
+    # character and facing.
     # The fighter stands at x = 0 here; the Z80 adds x * KVEC.
     sols = []
     for ci, ch in enumerate(chars):
@@ -498,8 +573,9 @@ def main():
                 both.append(recs)
             chrec.append(both)
         for f in (0, 1):
-            with open(os.path.join(OUT, "pose_%d_%d.bin" % (ci, f)), "wb") as fo:
-                fo.write(data[f])
+            for half in (0, 1):
+                with open(os.path.join(OUT, "pose_%d_%d_%d.bin" % (ci, f, half)), "wb") as fo:
+                    fo.write(data[f][half * POSES_BANK * POSE_BYTES:(half + 1) * POSES_BANK * POSE_BYTES])
         sols.append(chrec)
 
     # ---- the ring in a fight: the camera's own matrix
@@ -522,13 +598,23 @@ def main():
     with open(os.path.join(OUT, "orbit.bin"), "wb") as f:
         f.write(orbit_bin)
 
-    lr = light(C0)
+    # ---- the ring under a turned axis: its matrix and the light that goes
+    # with it, per step of the turn (the translation is always ring_rec's:
+    # the ring turns about its own centre)
+    ring_tab = b""
+    for a in range(AXIS_N):
+        m = mmul(C0, rot_y(360.0 * a / AXIS_N))
+        ring_tab += struct.pack("<12h", *([q14(m[i][j]) for i in range(3) for j in range(3)] + light(m)))
+    with open(os.path.join(OUT, "ring_tab.bin"), "wb") as f:
+        f.write(ring_tab)
+
+    lr = light(C0)                      # (tools/preview.py)
     l0 = [q14(v) for v in LIGHT0]
     with open(os.path.join(OUT, "inc", "const.asm"), "w") as f:
         w = lambda s: f.write(s + "\n")
         w("; generated by tools/gen_fighter.py")
-        w("ROM_BANKS:   equ 8")
-        w("POSE_BANK0:  equ 2               ; + 2 * character + facing")
+        w("ROM_BANKS:   equ 16")
+        w("POSE_BANK0:  equ 2               ; + 2 * (2 * character + facing) + (pose >= POSES_BANK)")
         for k, v in (("G3_W", G3_W), ("G3_H", G3_H), ("G3_F", G3_F), ("G3_CX", G3_CX), ("G3_CY", G3_CY),
                      ("G3_ZNEAR", G3_ZNEAR), ("VIEW_Y0", VIEW_Y0), ("NVERT_ALL", nvert), ("NVERT_FIGHT", nv_fight),
                      ("NFACE_ALL", len(all_faces)), ("NFACE_RING", len(ring_faces)), ("NPARTS", NPARTS),
@@ -536,18 +622,19 @@ def main():
                      ("FACE_BYTES", len(fbin)), ("ORBIT_N", ORBIT_N), ("ORBIT_REC", 30),
                      ("KVEC_X", q14(KVEC[0])), ("KVEC_Y", q14(KVEC[1])), ("KVEC_Z", q14(KVEC[2])),
                      ("LIGHT_X", l0[0]), ("LIGHT_Y", l0[1]), ("LIGHT_Z", l0[2]),
-                     ("LRING_X", lr[0]), ("LRING_Y", lr[1]), ("LRING_Z", lr[2]),
                      ("WALK_X", WALK_X), ("MARK_X", MARK_X), ("MIN_SEP", MIN_SEP), ("CAM_MAX", CAM_MAX),
+                     ("POSES_BANK", POSES_BANK), ("AXIS_N", AXIS_N), ("STEP_TURN", STEP_TURN),
+                     ("JUMP_AIR0", JUMP_AIR0), ("JUMP_AIR1", JUMP_AIR1),
                      ("COL_BLACK", COL_BLACK), ("COL_WHITE", COL_WHITE), ("COL_GROUND", COL_GROUND),
                      ("COL_YELLOW", COL_YELLOW), ("COL_RED", COL_RED), ("COL_BARBG", COL_BARBG),
                      ("COL_FRAME", COL_FRAME), ("COL_GREEN", COL_GREEN), ("COL_ORANGE", COL_ORANGE)):
             w("%s:%s equ %d" % (k, " " * max(1, 12 - len(k)), v))
         for i, name in enumerate(ANIM_ORDER):
             w("AN_%s:%s equ %d" % (name.upper(), " " * (9 - len(name)), i))
-        for name, mv in MOVES.items():
-            w("MV_%s_STEP:  equ %d" % (name.upper(), mv["hit_step"]))
-            w("MV_%s_REACH: equ %d" % (name.upper(), mv["reach"]))
-            w("MV_%s_DMG:   equ %d" % (name.upper(), mv["damage"]))
+        for i, mv in enumerate(MOVES):
+            w("MV_%s:%s equ %d" % (mv[0].upper(), " " * (9 - len(mv[0])), i))
+        for name, v in LEVELS.items():
+            w("LV_%s:%s equ %d" % (name.upper(), " " * (9 - len(name)), v))
 
     with open(os.path.join(OUT, "inc", "tables.asm"), "w") as f:
         w = lambda s: f.write(s + "\n")
@@ -556,8 +643,15 @@ def main():
         for slot in (0, 1):
             w("part_end_%d:" % slot)
             w("        db " + ", ".join(str(ranges[slot][i][1]) for i in range(NPARTS)))
-        w("ring_rec:")
-        w("        dw " + ", ".join(str(v) for v in ring_rec))
+        w("ring_t0:                        ; the ring's translation under the fight camera")
+        w("        dw " + ", ".join(str(v) for v in ring_rec[9:]))
+        w("; moves: animation, hit step, reach, damage, height")
+        w("move_tab:")
+        for name, anim, step, reach, dmg, lv in MOVES:
+            w("        db %d, %d, %d, %d, %d      ; %s" % (ANIM_ORDER.index(anim), step, reach, dmg, LEVELS[lv], name))
+        w("; per animation: 1 crouching, 2 the standing guard, 4 the crouching guard")
+        w("anim_fl:")
+        w("        db " + ", ".join(str(ANIM_FLAGS.get(n, 0)) for n in ANIM_ORDER))
         w("; animations: first pose, steps, ticks per step, mode (0 loop, 1 once, 2 hold, 3 loop the last 4)")
         w("anim_tab:")
         modes = {"loop": 0, "once": 1, "hold": 2, "loopend": 3}

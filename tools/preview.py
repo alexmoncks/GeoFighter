@@ -9,6 +9,7 @@ point: close to the cartridge's picture, not identical to it.
 
   preview.py sheet [char]     out/preview_sheet<char>.png: every pose, looking right
   preview.py scene P0 P1 X0 X1 [name]   one fight frame: poses and x of both fighters
+  preview.py poses N...       out/preview_poses.png: those poses of fighter 0, full frames
   preview.py orbit [n]        out/preview_orbit.png: n frames of the opening shot (default 12)
 """
 import json
@@ -130,6 +131,9 @@ def main():
               os.path.join(OUT, "preview_sheet%d.png" % ch))
         names = sorted(G["anims"].items(), key=lambda kv: kv[1][0])
         print("sheet: %d poses; " % n + ", ".join("%s %d-%d" % (k, v[0], v[0] + v[1] - 1) for k, v in names))
+    elif cmd == "poses":
+        idx = [int(a) for a in sys.argv[2:]]
+        sheet([render(i, 0, -40, 40) for i in idx], 4, W, H, 0, 0, os.path.join(OUT, "preview_poses.png"))
     elif cmd == "orbit":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 12
         total = len(G["orbit"])

@@ -7,12 +7,13 @@
 ; on the keyboard or joystick 1 against the machine, or the machine against
 ; itself).
 ;
-; MSX MegaROM, ASCII16 mapper, 128 KB:
+; MSX MegaROM, ASCII16 mapper, 256 KB:
 ;   bank 0   page 1 (4000h-7FFFh), fixed: all the code, the animation table,
 ;            the sounds
 ;   bank 1   page 2 (8000h-BFFFh) at boot: the palette, the vertices and the
 ;            faces of the scene, the opening shot (its vertices, its camera)
-;   bank 2+  the poses: one bank per character and facing, POSE_BYTES per pose
+;            and the ring under a turned axis
+;   bank 2+  the poses: two banks per character and facing, POSE_BYTES per pose
 ; Ports come from out/ports.asm (build.sh): PORT_BASE 98h (openMSX: the
 ; V9968 is the machine's VDP) or 88h (the V9968 cartridge next to the
 ; internal VDP). geo3d sits at PORT_BASE + 5 (index/status) and + 7 (data).
@@ -70,7 +71,7 @@ IN_LEFT:    equ 2
 IN_RIGHT:   equ 3
 IN_A:       equ 4               ; SPACE, Z, trigger A: punch
 IN_B:       equ 5               ; X, trigger B: kick
-IN_G:       equ 6               ; C: guard (also DOWN)
+IN_G:       equ 6               ; C: the standing guard (DOWN: the crouching one)
 IN_START:   equ 7               ; RETURN
 
 ; ============================================================================
@@ -202,26 +203,48 @@ vtx_intro:                          ; the opening shot's vertices
         incbin "out/vtx_intro.bin"
 orbit_tab:                          ; ... and its camera, ORBIT_REC bytes a frame
         incbin "out/orbit.bin"
+ring_tab:                           ; the ring under a turned axis: 24 bytes a step
+        incbin "out/ring_tab.bin"
 bank1_end:
         ds 0xC000 - $, 0xFF
 
 ; ============================================================================
-; banks 2..5: the poses of character 0 looking right, looking left, then
-; character 1's
+; banks 2..9: the poses. Two banks (POSES_BANK poses each) for character 0
+; looking right, two looking left, then character 1's.
 ; ============================================================================
         org 0x8000
-        incbin "out/pose_0_0.bin"
+        incbin "out/pose_0_0_0.bin"
         ds 0xC000 - $, 0xFF
         org 0x8000
-        incbin "out/pose_0_1.bin"
+        incbin "out/pose_0_0_1.bin"
         ds 0xC000 - $, 0xFF
         org 0x8000
-        incbin "out/pose_1_0.bin"
+        incbin "out/pose_0_1_0.bin"
         ds 0xC000 - $, 0xFF
         org 0x8000
-        incbin "out/pose_1_1.bin"
+        incbin "out/pose_0_1_1.bin"
         ds 0xC000 - $, 0xFF
-; banks 6 and 7: free (the ROM is 128 KB)
+        org 0x8000
+        incbin "out/pose_1_0_0.bin"
+        ds 0xC000 - $, 0xFF
+        org 0x8000
+        incbin "out/pose_1_0_1.bin"
+        ds 0xC000 - $, 0xFF
+        org 0x8000
+        incbin "out/pose_1_1_0.bin"
+        ds 0xC000 - $, 0xFF
+        org 0x8000
+        incbin "out/pose_1_1_1.bin"
+        ds 0xC000 - $, 0xFF
+; banks 10..15: free (the ROM is 256 KB)
+        org 0x8000
+        ds 0x4000, 0xFF
+        org 0x8000
+        ds 0x4000, 0xFF
+        org 0x8000
+        ds 0x4000, 0xFF
+        org 0x8000
+        ds 0x4000, 0xFF
         org 0x8000
         ds 0x4000, 0xFF
         org 0x8000

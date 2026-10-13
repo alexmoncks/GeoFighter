@@ -48,6 +48,7 @@ gr_1:   call frame_begin
         ld (gm_demo), a
         ld (ft0 + FT_CPU), a
         ld (ft0 + FT_INTENT), a
+        ld (ft0 + FT_PRESS), a
         ld a, 0xFF
         ld (in_prev), a
         ld a, SFX_BELL
@@ -136,6 +137,9 @@ round_init:
         ld (gm_state), a
         ld (gm_msg), a
         ld (orb_i), a
+        ld (gm_axis), a
+        ld (tap_u), a
+        ld (tap_d), a
         ld a, 2
         ld (hud_dirty), a
         call lg_cam
@@ -150,6 +154,7 @@ ri_one: ld (ix + FT_X), l
         ld (ix + FT_STATE), ST_AUTO
         xor a
         ld (ix + FT_INTENT), a
+        ld (ix + FT_PRESS), a
         ld (ix + FT_AIT), a
         ld (ix + FT_AICMD), a
         ld a, AN_IDLE
@@ -258,6 +263,8 @@ lf_3:   ld a, b
         xor a
         ld (ft0 + FT_INTENT), a
         ld (ft1 + FT_INTENT), a
+        ld (ft0 + FT_PRESS), a
+        ld (ft1 + FT_PRESS), a
         ld a, GS_KO
         ld b, 50
         ld c, MSG_KO

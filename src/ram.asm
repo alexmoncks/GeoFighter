@@ -50,6 +50,9 @@ dv_ft1:     ds 6
 kv_d:       ds 2            ; kvec's work
 kv_p:       ds 2
 orb_i:      ds 1            ; frame of the opening shot
+gm_axis:    ds 1            ; the fight's axis: how far the ring is turned (0..AXIS_N-1)
+tap_u:      ds 1            ; ticks left for a second tap of up (tap_d must follow)
+tap_d:      ds 1            ; ... and of down
 gm_state:   ds 1            ; GS_*
 gm_timer:   ds 1
 gm_demo:    ds 1            ; 1: the machine plays both

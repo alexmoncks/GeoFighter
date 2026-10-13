@@ -301,7 +301,7 @@ title_screen:
         call box
         call wait_ce
         ld hl, title_texts
-        ld b, 6
+        ld b, 8
         call txt_list
         xor a
         ld (buf), a
@@ -336,11 +336,15 @@ title_texts:
         db "GEO FIGHTER", 0
         db 56, 66, 0, COL_ORANGE, 1
         db "V9968 + GEO3D DEMO", 0
-        db 28, 108, 0, COL_WHITE, 1
+        db 28, 94, 0, COL_WHITE, 1
         db "SPACE OR TRIGGER: 1 PLAYER", 0
-        db 28, 124, 0, COL_FRAME, 1
-        db "CURSORS WALK   SPACE PUNCH", 0
-        db 28, 136, 0, COL_FRAME, 1
-        db "X KICK   C OR DOWN GUARD", 0
-        db 72, 176, 0, COL_GREEN, 1
+        db 28, 114, 0, COL_FRAME, 1
+        db "LEFT RIGHT WALK    UP JUMP", 0
+        db 28, 126, 0, COL_FRAME, 1
+        db "SPACE PUNCH X KICK C GUARD", 0
+        db 28, 138, 0, COL_FRAME, 1
+        db "DOWN CROUCH: LOW PUNCH KICK", 0
+        db 28, 150, 0, COL_FRAME, 1
+        db "UP UP, DOWN DOWN: SIDESTEP", 0
+        db 72, 182, 0, COL_GREEN, 1
         db "RAI VS DAGO", 0

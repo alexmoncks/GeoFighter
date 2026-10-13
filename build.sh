@@ -4,7 +4,7 @@
 # build.sh - builds the GEO FIGHTER cartridge (WSL / Linux: z80asm 1.8, python3)
 #   out/GEOFIGHTER_98.ROM  V9968 at 98h (openMSX V9968 fork: -machine ... -ext geo3d)
 #   out/GEOFIGHTER_88.ROM  V9968 cartridge at 88h next to the internal VDP (real hardware)
-# 128 KB ASCII16 MegaROMs. The models, the poses and the tables come from
+# 256 KB ASCII16 MegaROMs. The models, the poses and the tables come from
 # tools/gen_fighter.py, which runs when out/ is missing or older than the
 # tools, or with --data. Also writes out/labels_98.txt (z80asm label list,
 # read by the tests) and prints the free space of bank 0 and the RAM use.

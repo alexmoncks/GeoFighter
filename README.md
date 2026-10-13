@@ -8,11 +8,16 @@ Este repositório está na fase do **demo de teste**: dois personagens (RAI e DA
 
 ![Luta](docs/luta.png) ![Vitória](docs/vitoria.png)
 
+![Rasteira](docs/rasteira.png) ![Voadora](docs/voadora.png)
+
+![Pulo](docs/pulo.png) ![Passo lateral](docs/passo.png)
+
 ## O que o demo faz
 
 - Título, giro de 360° da câmera em volta do ringue até fechar nos lutadores, "ROUND 1", "FIGHT!", luta, nocaute, pose de vitória, novo round.
 - Jogador 1 no teclado ou no joystick 1 contra a máquina. Sem apertar nada no título, a máquina joga contra si mesma.
-- Golpes: soco e chute. Defesa bloqueia os dois. Barras de vida no alto.
+- Golpes: soco, chute, soco baixo, rasteira, voadora e soco de cima. Pulo, agachamento e passo lateral, que gira o eixo da luta dentro do ringue.
+- Duas defesas, em pé e agachada: cada golpe tem uma altura, e a altura decide qual defesa o segura.
 - 30 quadros por segundo, com som de golpe, defesa e queda no PSG.
 
 ## Controles
@@ -22,8 +27,27 @@ Este repositório está na fase do **demo de teste**: dois personagens (RAI e DA
 | Andar | cursores esquerda e direita | esquerda e direita |
 | Soco | ESPAÇO ou Z | botão A |
 | Chute | X | botão B |
-| Defesa | C ou cursor para baixo | para baixo |
+| Pulo | um toque no cursor para cima | para cima |
+| Voadora | para cima com chute (juntos, ou o chute durante o pulo) | para cima com B |
+| Soco de cima | para cima com soco (juntos, ou o soco durante o pulo) | para cima com A |
+| Agachar e defender | segurar o cursor para baixo | para baixo |
+| Rasteira | agachado, chute | para baixo com B |
+| Soco baixo | agachado, soco | para baixo com A |
+| Passo lateral para o fundo | dois toques rápidos para cima | dois toques para cima |
+| Passo lateral para a frente | dois toques rápidos para baixo | dois toques para baixo |
+| Defesa em pé | C, ou andar para trás na hora do golpe | para trás na hora do golpe |
 | Voltar ao título | RETURN | |
+
+No ar, esquerda e direita ainda levam o lutador para a frente ou para trás. O segundo toque do passo lateral tem de vir em até 0,3 s.
+
+| Golpe | Altura | Quem segura |
+|---|---|---|
+| Soco | alto | defesa em pé; passa por cima de quem está agachado |
+| Chute | médio | as duas defesas |
+| Soco baixo, rasteira | baixo | só a defesa agachada; não pega quem está no ar |
+| Voadora, soco de cima | de cima | só a defesa em pé |
+
+O passo lateral tira o lutador da linha de qualquer golpe.
 
 No demo automático, ESPAÇO ou o botão A passa o controle do RAI para você. Durante o giro de abertura, um novo toque em ESPAÇO ou no botão A pula direto para a luta.
 
@@ -31,7 +55,7 @@ No demo automático, ESPAÇO ou o botão A passa o controle do RAI para você. D
 
 - **openMSX (fork com V9968 e geo3d):** `jogar_openmsx.bat`, ou
   `openmsx -machine C-BIOS_V9968_JP -ext geo3d -cart release/GEOFIGHTER_98.ROM -romtype ASCII16`.
-- **Cartucho real (V9968 em 88h):** `release/GEOFIGHTER_88.ROM`, MegaROM ASCII16 de 128 KB.
+- **Cartucho real (V9968 em 88h):** `release/GEOFIGHTER_88.ROM`, MegaROM ASCII16 de 256 KB.
 - **Raspberry Pi com o pacote geo3d-rpi:** copie `GEOFIGHTER_98.ROM` para a pasta `roms` do cartão; o menu o reconhece sozinho pela assinatura `ROM_AS16`.
 
 ## Como montar
@@ -51,16 +75,18 @@ Para ver as poses sem emulador:
 cd tools
 python3 preview.py sheet 0              # out/preview_sheet0.png: todas as poses do personagem 0
 python3 preview.py scene 0 0 -64 64     # out/preview_scene.png: um quadro da luta com os dois
+python3 preview.py poses 64 78 98 114   # out/preview_poses.png: as poses pedidas, em quadro inteiro
 python3 preview.py orbit 12             # out/preview_orbit.png: 12 quadros do giro de abertura
 ```
 
 ## Testes
 
 ```sh
-bash tests/run_tests.sh                 # boot, demo e play
+bash tests/run_tests.sh                 # boot, demo, play e moves
+bash tests/run_tests.sh moves           # golpes especiais, passo lateral e o que cada defesa segura
 bash tests/run_tests.sh skip            # o toque que corta o giro de abertura
 bash tests/run_tests.sh prof proforbit  # quadros por segundo e tempo de cada etapa, na luta e no giro
-SHOT=1 bash tests/run_tests.sh shots    # capturas de tela em out/test/shots
+SHOT=1 bash tests/run_tests.sh shots shotsmoves   # capturas de tela em out/test/
 PROFILE=88 MACHINE=Philips_NMS_8250 bash tests/run_tests.sh play
 ```
 
