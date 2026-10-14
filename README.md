@@ -4,6 +4,12 @@ Jogo de luta 3D para MSX com o V9968 e o coprocessador geo3d, no estilo do Virtu
 
 Este repositório está na fase do **demo de teste**: dois personagens (RAI e DAGO) lutam num ringue visto em diagonal e de cima, depois de a câmera dar uma volta completa em torno dele.
 
+**O jogo precisa do geo3d v2.0** (ramo `geo3d-v2.0` de V9968_Cartridge), que guarda até 1.023 vértices e faces: cada lutador tem 420 vértices e 386 faces, e a cena inteira 869 e 792. Com o geo3d v1.0.0 o cartucho mostra "GEO3D V2.0 NECESSARIO" e para. A versão para o geo3d v1.0.0, com 120 vértices por lutador, é a do commit `8afb1ac`.
+
+![Antes e depois](docs/antes_depois.png)
+
+*À esquerda os lutadores do geo3d v1.0.0 (120 vértices cada), à direita os do v2.0 (420), no mesmo quadro, ampliados.*
+
 ![Giro](docs/giro1.png) ![Giro](docs/giro2.png)
 
 ![Luta](docs/luta.png) ![Vitória](docs/vitoria.png)
@@ -53,10 +59,11 @@ No demo automático, ESPAÇO ou o botão A passa o controle do RAI para você. D
 
 ## Como rodar
 
-- **openMSX (fork com V9968 e geo3d):** `jogar_openmsx.bat`, ou
+- **openMSX (fork com V9968 e geo3d, ramo `geo3d-v2.0`):** `jogar_openmsx.bat`, que usa o `openmsx_geo3d_v2.exe` de `..\openmsx-geo3d`, ou
   `openmsx -machine C-BIOS_V9968_JP -ext geo3d -cart release/GEOFIGHTER_98.ROM -romtype ASCII16`.
-- **Cartucho real (V9968 em 88h):** `release/GEOFIGHTER_88.ROM`, MegaROM ASCII16 de 256 KB.
-- **Raspberry Pi com o pacote geo3d-rpi:** copie `GEOFIGHTER_98.ROM` para a pasta `roms` do cartão; o menu o reconhece sozinho pela assinatura `ROM_AS16`.
+- **blueMSX+ (ramo local `geo3d-v2.0`):** `bluemsx_geo3d_v2.bat` em `..\blueMSX-plus-builds` abre o jogo na máquina `MSX2+ - C-BIOS V9968`.
+- **Cartucho real (V9968 em 88h):** `release/GEOFIGHTER_88.ROM`, MegaROM ASCII16 de 256 KB, com o bitstream do geo3d v2.0 (`geo3d_v2.0-dev_1023.fs`; o firmware oficial do HRA! é o v1.0.0).
+- **Raspberry Pi com o pacote geo3d-rpi:** o pacote ainda traz o openMSX do geo3d v1.0.0; o jogo atual não roda nele.
 
 ## Como montar
 
@@ -90,16 +97,18 @@ SHOT=1 bash tests/run_tests.sh shots shotsmoves   # capturas de tela em out/test
 PROFILE=88 MACHINE=Philips_NMS_8250 bash tests/run_tests.sh play
 ```
 
-Os testes dirigem o openMSX pelo `tests/run.tcl`: seguram teclas, esperam quadros e conferem a memória do jogo pelos rótulos do assembler. `OPENMSX=...` escolhe o emulador (o padrão é o `openmsx.exe` de `..\openmsx-geo3d`).
+Os testes dirigem o openMSX pelo `tests/run.tcl`: seguram teclas, esperam quadros e conferem a memória do jogo pelos rótulos do assembler. `OPENMSX=...` escolhe o emulador (o padrão é o `openmsx_geo3d_v2.exe` de `..\openmsx-geo3d`; precisa ser um openMSX com o geo3d v2.0).
 
 ## Estado
 
 | Item | Situação |
 |---|---|
-| Emulador, perfil 98h | funciona, 30 quadros por segundo, 15 ms de trabalho por quadro na luta e 7 ms no giro |
-| Emulador, perfil 88h | funciona (testado num MSX2 com o cartucho emulado) |
+| openMSX v2.0, perfil 98h | funciona, 30 quadros por segundo, 18 ms de trabalho por quadro na luta e 8 ms no giro |
+| openMSX v2.0, perfil 88h | funciona (testado num MSX2 com o cartucho emulado) |
+| blueMSX+ v2.0 | funciona, 100 % de velocidade |
+| geo3d v2.0 simulado (RTL) | o quadro da luta leva 6,9 ms no geo3d e no V9968 em modo rápido |
 | Cartucho real | ainda não testado |
-| Raspberry Pi | ainda não testado |
+| Raspberry Pi | não roda: o pacote ainda é do geo3d v1.0.0 |
 
 Detalhes de como o 3D foi otimizado, formatos de dados, medições e o plano para o jogo completo estão em [docs/design.md](docs/design.md).
 

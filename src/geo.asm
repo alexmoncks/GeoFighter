@@ -3,33 +3,34 @@
 ; ============================================================================
 ; geo.asm - what geo3d draws: the ring and the two fighters
 ;
-; The scene is a resident scene (VECTOR RAID, docs/engine.md 6.3). All the
-; faces are loaded once (geo_init) and stay in geo3d, and so do the vertices:
+; geo3d v2.0 is needed (geo_init checks it): the scene has more than 255
+; vertices and faces, and every RUN works on its own range of them
+; (VFIRST/NVERT for the vertices, FFIRST/NFACE for the faces). It is a
+; resident scene (VECTOR RAID, docs/engine.md 6.3): all the faces are loaded
+; once (geo_init) and stay in geo3d, and so do the vertices:
 ;
-;   vertices   fighter 0's parts, fighter 1's parts, the ring (the highest)
+;   vertices   fighter 0's parts, fighter 1's parts, then the ring's
 ;   faces      the ring's first (0..NFACE_RING-1), then the fighters'
 ;
-; A RUN transforms vertices 0..NVERT-1 and keeps the projection of the rest,
-; and a face with a vertex behind the near plane is skipped.
+; A RUN transforms its range of vertices and keeps the projection of all
+; the others; a face with a vertex behind the near plane is skipped.
 ;
 ; A frame of the fight (scene_draw):
-;   1. the ring: NVERT = all, NFACE = NFACE_RING, the camera's matrix with
-;      the ring turned as the fight's axis is (gm_axis: a sidestep turns
-;      it; one matrix and its light for each of the AXIS_N notches).
-;   2. a hide RUN: NFACE = 0 and TZ behind the near plane. Every vertex is
-;      now hidden, the ring's too.
-;   3. one transform-only RUN (NFACE = 0) for each body part: its matrix and
-;      translation come ready from the pose table; the Z80 adds the
-;      fighter's place along the ring (a vector worked out once a frame).
-;   4. the last RUN: NVERT = 0, NFACE = all. It sorts the faces of both
-;      fighters together, far to near, and paints them; the ring's faces are
-;      skipped (hidden in step 2). Its matrix is the identity.
+;   1. the ring: its own vertices and faces, the camera's matrix with the
+;      ring turned as the fight's axis is (gm_axis: a sidestep turns it; one
+;      matrix and its light for each of the AXIS_N notches)
+;   2. one transform-only RUN (NFACE = 0) for each body part, its own
+;      vertices only: its matrix and translation come ready from the pose
+;      table; the Z80 adds the fighter's place along the ring (a vector
+;      worked out once a frame)
+;   3. the last RUN: NVERT = 0 and the fighters' faces. It sorts the faces
+;      of both fighters together, far to near, and paints them. Its matrix
+;      is the identity.
 ;
 ; A frame of the opening shot (scene_orbit): the camera circles the ring and
 ; nothing else moves, so the vertices loaded are the ones of the stance
 ; already in the world (geo_vtx) and the whole frame is one camera record
-; from the table: the ring's RUN, the hide RUN, and one RUN that transforms
-; the fighters' vertices and paints all their faces.
+; from the table: one RUN for the ring, one for both fighters.
 ;
 ; No face is uploaded in a frame. The normals are stored in the fight
 ; camera's space, and each RUN gets the light that goes with its matrix
@@ -38,9 +39,42 @@
 ; command registers or geo3d; CE = 0 does not mean the engine is free.
 ; ============================================================================
 
+; -> Z: geo3d v2.0 with room for the scene, the scene's faces loaded.
+; NZ: an older geo3d (v1.0.0 reads FFh at index 49h) or a smaller build.
 geo_init:
-        ld a, 1
-        ld (BANK2_SEL), a
+        ld a, 0x49
+        out (GEO_IDX), a
+        in a, (GEO_DAT)
+        cp 0xFF
+        jr z, gi_old                ; v1.0.0
+        cp 0x20
+        jr c, gi_old                ; (v1.1-dev: 11h)
+        ; the high bits of the pointers and counts, and XCTRL: the extended
+        ; mode (10-bit pointers, 12-byte faces)
+        ld a, 0x68
+        out (GEO_IDX), a
+        ld hl, geo_r68
+        ld bc, 8 * 256 + GEO_DAT
+        otir
+        ; XCTRL bits 7-4: the address bits of geo3d's RAMs
+        ld a, 0x6F
+        out (GEO_IDX), a
+        in a, (GEO_DAT)
+        and 0xF0
+        cp GEO3D_AW * 16
+        jr c, gi_old
+        ld a, 0x54
+        out (GEO_IDX), a
+        xor a
+        out (GEO_DAT), a            ; VFIRST = 0
+        out (GEO_DAT), a
+        out (GEO_DAT), a            ; FFIRST = 0
+        out (GEO_DAT), a
+        ld a, 0x66
+        out (GEO_IDX), a
+        xor a
+        out (GEO_DAT), a            ; EFIRST = 0
+        out (GEO_DAT), a
         ld a, 0x18
         out (GEO_IDX), a
         ld hl, geo_cam
@@ -56,14 +90,20 @@ geo_init:
         xor a
         out (GEO_DAT), a            ; FADDR = 0
         out (GEO_DAT), a            ; NFACE = 0
-        ; the faces (11 bytes each, from FADDR = 0): they follow the fight's vertices
+        ; the faces (12 bytes each, from FADDR = 0): they follow the fight's vertices
+        ld a, MODEL_BANK
+        ld (BANK2_SEL), a
         ld a, 0x52
         out (GEO_IDX), a
-        ld hl, models + VTX_BYTES
+        ld hl, 0x8000 + VTX_BYTES
         ld de, FACE_BYTES
         call geo_stream
         ld a, 1
+        ld (BANK2_SEL), a
         ld (st_geo), a
+        xor a                       ; Z
+        ret
+gi_old: or 1                        ; NZ
         ret
 
 ; A = 0: the fight's vertices (each part in its own frame); 1: the opening
@@ -71,8 +111,10 @@ geo_init:
 geo_vtx:
         push af
         call geo_wait
-        ld a, 1
-        ld (BANK2_SEL), a
+        ld a, 0x68
+        out (GEO_IDX), a
+        xor a
+        out (GEO_DAT), a            ; VADDR's high bits
         ld a, 0x40
         out (GEO_IDX), a
         xor a
@@ -81,25 +123,41 @@ geo_vtx:
         out (GEO_IDX), a
         pop af
         or a
-        ld hl, models
+        ld a, MODEL_BANK
+        ld hl, 0x8000
         jr z, gv_1
+        ld a, 1
         ld hl, vtx_intro
-gv_1:   ld de, VTX_BYTES
-        ; fall through
-; HL -> DE bytes for the data port
+gv_1:   ld (BANK2_SEL), a
+        ld de, VTX_BYTES
+        call geo_stream
+        ld a, 1
+        ld (BANK2_SEL), a
+        ret
+
+; HL -> DE bytes for the data port, 256 at a time
 geo_stream:
         ld c, GEO_DAT
-gst_1:  outi
-        dec de
-        ld a, d
-        or e
-        jr nz, gst_1
+gst_1:  ld a, d
+        or a
+        jr z, gst_2
+        ld b, 0
+        otir                        ; 256 bytes
+        dec d
+        jr gst_1
+gst_2:  ld a, e
+        or a
+        ret z
+        ld b, e
+        otir
         ret
 
 geo_cam:
         dw G3_F, G3_CX, G3_CY, G3_ZNEAR, G3_W, G3_H
 geo_r40:
         db 0, 0, 0, 0, 15, 0, 0, 0
+geo_r68:                            ; the high bits: all 0; XCTRL = 1
+        db 0, 0, 0, 0, 0, 0, 0, 1
 ident_rec:
         dw 16384, 0, 0, 0, 16384, 0, 0, 0, 16384, 0, 0, 0
 light_id:                           ; for a RUN with the identity
@@ -120,15 +178,46 @@ gw_1:   in a, (GEO_IDX)
         ld (st_geo), a
         ret
 
-; A = NVERT, HL -> a record (9 matrix words, TX, TY, TZ), DE -> 3 words
-; added to the translation: one RUN, waited for. -> HL after the record,
-; DE after the vector. Keeps IX, IY.
-geo_rec:
-        ld b, a
+; HL = the first vertex, DE = how many: the range a RUN transforms
+geo_vrange:
+        ld a, 0x54
+        out (GEO_IDX), a
+        ld a, l
+        out (GEO_DAT), a            ; VFIRST
+        ld a, h
+        out (GEO_DAT), a
         ld a, 0x42
         out (GEO_IDX), a
-        ld a, b
+        ld a, e
         out (GEO_DAT), a            ; NVERT
+        ld a, 0x6A
+        out (GEO_IDX), a
+        ld a, d
+        out (GEO_DAT), a
+        ret
+
+; HL = the first face, DE = how many: the faces a RUN paints
+geo_frange:
+        ld a, 0x56
+        out (GEO_IDX), a
+        ld a, l
+        out (GEO_DAT), a            ; FFIRST
+        ld a, h
+        out (GEO_DAT), a
+        ld a, 0x59
+        out (GEO_IDX), a
+        ld a, e
+        out (GEO_DAT), a            ; NFACE
+        ld a, 0x6D
+        out (GEO_IDX), a
+        ld a, d
+        out (GEO_DAT), a
+        ret
+
+; HL -> a record (9 matrix words, TX, TY, TZ), DE -> 3 words added to the
+; translation: one RUN of the range already set, waited for. -> HL after
+; the record, DE after the vector. Keeps IX, IY.
+geo_rec:
         xor a
         out (GEO_IDX), a
         ld bc, 18 * 256 + GEO_DAT
@@ -148,7 +237,8 @@ gre_1:  ld a, (de)
         djnz gre_1
         jr geo_go
 
-; A = NVERT, HL -> a record: one RUN, waited for. -> HL after the record.
+; HL -> a record: one RUN of the range already set, waited for. -> HL after
+; the record.
 geo_run:
         call geo_set
 geo_go: ld a, 0x48
@@ -157,26 +247,12 @@ geo_go: ld a, 0x48
         out (GEO_DAT), a            ; RUN, filled faces
         jr geo_wait
 
-; A = NVERT, HL -> a record: everything but the RUN
+; HL -> a record: the matrix and the translation
 geo_set:
-        ld b, a
-        ld a, 0x42
-        out (GEO_IDX), a
-        ld a, b
-        out (GEO_DAT), a
         xor a
         out (GEO_IDX), a
         ld bc, 24 * 256 + GEO_DAT
         otir
-        ret
-
-; A = NFACE
-geo_nface:
-        ld b, a
-        ld a, 0x59
-        out (GEO_IDX), a
-        ld a, b
-        out (GEO_DAT), a
         ret
 
 ; HL -> LX, LY, LZ
@@ -186,18 +262,6 @@ geo_light:
         ld bc, 6 * 256 + GEO_DAT
         otir
         ret
-
-; every vertex behind the near plane: only TZ is written
-scene_hide:
-        xor a
-        call geo_nface
-        ld a, 0x16
-        out (GEO_IDX), a
-        xor a
-        out (GEO_DAT), a
-        ld a, 0xF8
-        out (GEO_DAT), a            ; TZ = -2048
-        jr geo_go
 
 ; ---------------------------------------------------------------- the frame
 ; the whole picture of the hidden page (buf); returns while the last RUN
@@ -215,6 +279,12 @@ scene_draw:
         jp z, scene_orbit           ; GS_ORBIT
         ; 1. the ring, turned as the fight's axis is: its matrix and light
         ; from the table, its translation worked out with the camera's
+        ld hl, NVERT_FIGHT
+        ld de, NVERT_RING
+        call geo_vrange
+        ld hl, 0
+        ld de, NFACE_RING
+        call geo_frange
         ld a, 1
         ld (BANK2_SEL), a
         ld a, (gm_axis)
@@ -233,41 +303,38 @@ scene_draw:
         ld de, 18
         add hl, de
         call geo_light
-        ld a, NFACE_RING
-        call geo_nface
-        ld a, 0x42
-        out (GEO_IDX), a
-        ld a, NVERT_ALL
-        out (GEO_DAT), a
+        pop hl
         xor a
         out (GEO_IDX), a
-        pop hl
         ld bc, 18 * 256 + GEO_DAT
         otir                        ; the matrix
         ld hl, ring_t0
         ld de, dv_ring
         call geo_tr
-        ; 2. hide everything
-        call scene_hide
-        ; 3. the parts: fighter 1, then fighter 0
+        ; 2. the parts: fighter 1, then fighter 0 (transform only)
+        ld de, 0
+        call geo_frange             ; (HL: any face)
         ld ix, ft1
-        ld iy, part_end_1 + NPARTS - 1
+        ld iy, part_v_1 + (NPARTS - 1) * 3
         ld de, dv_ft1
         call scene_fighter
         ld ix, ft0
-        ld iy, part_end_0 + NPARTS - 1
+        ld iy, part_v_0 + (NPARTS - 1) * 3
         ld de, dv_ft0
         call scene_fighter
         ld a, 1
         ld (BANK2_SEL), a
-        ; 4. sort and paint every face
+        ; 3. sort and paint the fighters' faces
+        ld hl, 0
+        ld de, 0
+        call geo_vrange             ; NVERT = 0
+        ld hl, NFACE_RING
+        ld de, NFACE_FIGHT
+        call geo_frange
         ld hl, light_id
         call geo_light
-        ld a, NFACE_ALL
-        call geo_nface
         ld hl, ident_rec
-        xor a                       ; NVERT = 0
-        jp so_last
+        jr so_last
 
 ; the opening shot: the frame's camera record and light, for everything
 scene_orbit:
@@ -291,17 +358,24 @@ scene_orbit:
         ld de, 24
         add hl, de
         call geo_light
-        ld a, NFACE_RING
-        call geo_nface
+        ; the ring
+        ld hl, NVERT_FIGHT
+        ld de, NVERT_RING
+        call geo_vrange
+        ld hl, 0
+        ld de, NFACE_RING
+        call geo_frange
         pop hl
         push hl
-        ld a, NVERT_ALL
-        call geo_run                ; the ring
-        call scene_hide
-        ld a, NFACE_ALL
-        call geo_nface
+        call geo_run
+        ; the fighters, with the same camera
+        ld hl, 0
+        ld de, NVERT_FIGHT
+        call geo_vrange
+        ld hl, NFACE_RING
+        ld de, NFACE_FIGHT
+        call geo_frange
         pop hl
-        ld a, NVERT_FIGHT           ; the ring's vertices stay hidden
 so_last:
         call geo_set
         ld a, 0x48
@@ -310,8 +384,9 @@ so_last:
         out (GEO_DAT), a
         ret
 
-; IX -> fighter, IY -> the end of its last part's vertex range, DE -> its
-; place along the ring as a vector (dv_ft0, dv_ft1)
+; IX -> fighter, IY -> its last part's entry in part_v_<slot> (the first
+; vertex, a word, and how many, a byte), DE -> its place along the ring as a
+; vector (dv_ft0, dv_ft1)
 scene_fighter:
         ; the bank: two per character and facing, POSES_BANK poses in each
         ld a, (ix + FT_CHAR)
@@ -345,12 +420,21 @@ sfi_0:  ld l, a
         ld b, NPARTS
 sfi_1:  push bc
         push de
-        ld a, (iy + 0)
+        push hl
+        ld l, (iy + 0)
+        ld h, (iy + 1)
+        ld e, (iy + 2)
+        ld d, 0
+        call geo_vrange             ; this part's vertices
+        pop hl
+        pop de
+        push de
         call geo_rec
         pop de
         ld bc, -2 * POSE_REC
         add hl, bc
-        dec iy
+        ld bc, -3
+        add iy, bc
         pop bc
         djnz sfi_1
         ret

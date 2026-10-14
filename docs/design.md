@@ -1,6 +1,6 @@
 # GEO FIGHTER: desenho técnico
 
-Estado em 13/10/2026: demo de teste com dois personagens, câmera em diagonal vista de cima, abertura com giro de 360° em volta do ringue e golpes especiais (pulo, voadora, agachamento, rasteira, passo lateral). Este documento registra como o 3D foi organizado, o que foi medido e o que falta para o jogo completo (6 personagens, 8 cenários).
+Estado em 14/10/2026: demo de teste com dois personagens, câmera em diagonal vista de cima, abertura com giro de 360° em volta do ringue, golpes especiais (pulo, voadora, agachamento, rasteira, passo lateral) e lutadores de 420 vértices, que exigem o geo3d v2.0. Este documento registra como o 3D foi organizado, o que foi medido e o que falta para o jogo completo (6 personagens, 8 cenários).
 
 ## 1. Ideia central
 
@@ -17,9 +17,9 @@ As regras vêm do `engine.md` do VECTOR RAID e do README do geo3d.
 | Regra medida | Como o Geo Fighter aplica |
 |---|---|
 | Enviar uma face custa 61 µs de Z80; no máximo 96 por quadro | Nenhuma face é enviada durante o jogo: todas ficam residentes no geo3d |
-| Cada RUN custa cerca de 0,2 ms e reprocessa os vértices de 0 a NVERT-1 | Uma passada só de transformação por parte do corpo |
+| Cada RUN custa cerca de 0,2 ms; no geo3d v2.0 ele transforma só a faixa VFIRST..VFIRST+NVERT-1 | Uma passada só de transformação por parte do corpo, cada uma só com os vértices da sua parte |
 | Um RUN com NFACE = 0 só transforma; um com NVERT = 0 só desenha | A última passada desenha tudo, com uma única ordenação de profundidade para os dois lutadores |
-| Face com vértice atrás do plano próximo é descartada | Uma passada com TZ = -2048 esconde o ringue antes da passada final |
+| Cada RUN pinta só as faces FFIRST..FFIRST+NFACE-1 (geo3d v2.0) | O ringue e os lutadores têm faixas de faces próprias; a passada que escondia o ringue (TZ = -2048) deixou de existir |
 | Cada comando do VDP emitido pelo Z80 custa 0,2 ms: poucos e grandes | Fundo em 1 preenchimento; barra de status desenhada uma vez por round; mensagens copiadas por um só LMMM |
 | O que não muda a cada quadro não entra no quadro | Matrizes, translações, normais e o caminho da câmera pré-calculados; texto das mensagens desenhado no boot em linhas ocultas |
 | Nada escreve nos registradores de comando enquanto o geo3d roda | A ordem do quadro garante: preenchimento, depois geo3d, depois a mensagem |
@@ -31,21 +31,21 @@ Tela: SCREEN 8 com paleta estendida (256 cores de 15 bits), duas páginas, 30 qu
 | Etapa | O que faz | Luta | Giro de abertura |
 |---|---|---|---|
 | `frame_begin` | piso em volta do ringue: 1 HMMV | 0,29 ms | 0,29 ms |
-| `logic` | um passo do round; na luta, inclui as 9 multiplicações da câmera | 2,62 ms | 0,05 ms |
+| `logic` | um passo do round; na luta, inclui as 9 multiplicações da câmera | 2,59 ms | 0,05 ms |
 | `hud_bars` | barras de vida, só quando mudam | 0,05 ms | 0,01 ms |
-| `scene_draw` | ringue e passadas de transformação | 0,71 ms | 3,24 ms |
-| `geo_wait` | espera a passada final pintar os lutadores | 11,72 ms | 3,67 ms |
+| `scene_draw` | ringue e passadas de transformação | 0,80 ms | 3,30 ms |
+| `geo_wait` | espera a passada final pintar os lutadores | 14,22 ms | 4,46 ms |
 | `msg_draw` | mensagem sobre a imagem, quando há | 0,01 ms | 0,01 ms |
-| **Total** | de 33,4 ms disponíveis | **15,4 ms (máximo 16,9)** | **7,3 ms (máximo 8,7)** |
+| **Total** | de 33,4 ms disponíveis | **18,0 ms (máximo 19,7)** | **8,1 ms (máximo 10,0)** |
 
-Esses tempos são do openMSX, onde a transformação do geo3d é instantânea. No hardware cada vértice transformado custa até 1,14 µs e cada linha de face cerca de 3,2 µs, então o quadro será mais longo. Não foi medido no cartucho.
+Esses tempos são do openMSX (ramo `geo3d-v2.0` do fork), onde a transformação do geo3d é instantânea; com os lutadores de 120 vértices eram 15,4 e 7,3 ms. No RTL do geo3d v2.0 simulado, com o V9968 em modo rápido, o quadro da luta leva 6,9 ms dentro do geo3d (transformar, ordenar, montar e mandar os comandos, e o V9968 desenhando); com os lutadores antigos eram 4,1 ms. Não foi medido no cartucho.
 
 ## 4. A cena residente
 
-Tudo cabe no limite do geo3d: **253 de 255 vértices e 200 de 255 faces**.
+A cena usa **869 de 1.023 vértices e 792 de 1.023 faces** do geo3d v2.0 (o v1.0.0 guardava 255 de cada). No boot o cartucho confere o geo3d: índice 49h = 20h (versão 2.0) e XCTRL com memórias de 1.024 posições; com um geo3d mais antigo mostra "GEO3D V2.0 NECESSARIO" e para. Ele liga o modo estendido (ponteiros de 10 bits, faces de 12 bytes).
 
-- **Vértices:** as 11 partes do lutador 0 (120), as 11 do lutador 1 (120) e por último o ringue (13).
-- **Faces:** primeiro as 8 do ringue, depois as 96 de cada lutador.
+- **Vértices:** as 11 partes do lutador 0 (420), as 11 do lutador 1 (420) e por último o ringue (29).
+- **Faces:** primeiro as 20 do ringue, depois as 386 de cada lutador.
 
 As faces são carregadas uma vez, no boot. Os vértices têm dois conjuntos, trocados uma vez por round:
 
@@ -56,29 +56,30 @@ As faces são carregadas uma vez, no boot. Os vértices têm dois conjuntos, tro
 
 Passadas por quadro na luta:
 
-1. **Ringue:** NVERT = todos, NFACE = 8, matriz da câmera multiplicada pelo giro do eixo da luta. São 128 posições de eixo, cada uma com a matriz e a luz prontas (24 bytes); a translação é a mesma em todas, porque o ringue gira em torno do próprio centro.
-2. **Esconder:** NFACE = 0 e TZ atrás do plano próximo. Todos os vértices ficam escondidos, inclusive os do ringue.
-3. **Partes do corpo (22):** NFACE = 0, cada uma com sua matriz e translação vindas da tabela de poses, mais o vetor de posição do lutador.
-4. **Final:** NVERT = 0, NFACE = todas. Ordena as faces dos dois lutadores juntas e pinta. As do ringue são puladas porque seus vértices ficaram escondidos no passo 2.
+1. **Ringue:** VFIRST/NVERT = os 29 vértices dele, FFIRST/NFACE = as 20 faces dele, matriz da câmera multiplicada pelo giro do eixo da luta. São 128 posições de eixo, cada uma com a matriz e a luz prontas (24 bytes); a translação é a mesma em todas, porque o ringue gira em torno do próprio centro.
+2. **Partes do corpo (22):** NFACE = 0; VFIRST/NVERT = os vértices da parte (de 24 a 56); a matriz e a translação vêm da tabela de poses, mais o vetor de posição do lutador.
+3. **Final:** NVERT = 0, FFIRST/NFACE = as 772 faces dos lutadores. Ordena as faces dos dois juntas e pinta.
 
-Passadas por quadro no giro: o ringue, a passada que esconde, e uma só passada que transforma os 240 vértices dos lutadores e pinta todas as faces deles, as três com o mesmo registro de câmera.
+Passadas por quadro no giro: uma para o ringue e uma que transforma os 840 vértices dos lutadores e pinta todas as faces deles, as duas com o mesmo registro de câmera. Os vértices são enviados duas vezes por round (o conjunto da abertura e o da luta, 5,2 KB cada), em blocos de 256 bytes por OTIR.
 
 **Luz.** As normais ficam guardadas no espaço da câmera de luta. Antes de cada passada o registrador de luz recebe o valor que combina com a matriz daquela passada, de modo que cada face mantém o mesmo tom na luta e durante todo o giro. Consequência: o tom não muda quando o membro gira.
 
 ## 5. Modelos e poses
 
-- **Corpo:** 11 partes rígidas. Cada parte é uma pilha de anéis retangulares que compartilham vértices, o que dá mais faces por vértice que caixas soltas.
+- **Corpo:** 11 partes rígidas. Cada parte é uma pilha de anéis octogonais que compartilham vértices; cada octógono tem a mesma largura e profundidade do retângulo que substituiu, então as poses e as distâncias de golpe não mudaram. As tampas são 3 quadriláteros. O punho é um bloco de anéis retangulares e o pé, uma cunha.
 
 | Parte | Anéis | Vértices | Faces |
 |---|---|---|---|
-| Quadril | 2 | 8 | 6 |
-| Tronco (cintura, costelas, peito, ombros) | 4 | 16 | 14 |
-| Cabeça (queixo, maçãs, topo) | 3 | 12 | 10 |
-| Braço, cada | 2 | 8 | 6 |
-| Antebraço com punho, cada | 3 | 12 | 10 |
-| Coxa, cada | 2 | 8 | 6 |
-| Canela com pé em cunha, cada | 2 + cunha | 14 | 11 |
-| **Lutador** | | **120** | **96** |
+| Quadril | 3 | 24 | 22 |
+| Tronco (cintura, faixa, barriga, peito, ombros, trapézio) | 6 | 48 | 46 |
+| Cabeça (pescoço, queixo, mandíbula, bochechas, têmporas, testa, topo) | 7 | 56 | 54 |
+| Braço (cotovelo, bíceps, ombro), cada | 4 | 32 | 30 |
+| Antebraço com punho, cada | 4 + 3 | 44 | 37 |
+| Coxa (joelho, coxa, quadril), cada | 4 | 32 | 30 |
+| Canela com panturrilha e pé em cunha, cada | 4 + cunha | 38 | 35 |
+| **Lutador** | | **420** | **386** |
+
+Com os anéis retangulares do geo3d v1.0.0 o lutador tinha 120 vértices e 96 faces. O ringue passou de 2 × 2 para 4 × 4 ladrilhos.
 
 - **Personagens:** mesma estrutura, com medidas e cores próprias. RAI é esguio, de kimono branco com faixa preta. DAGO é mais largo, de barba, luvas vermelhas e calção azul.
 - **Pose:** ângulos de cada junta. O `gen_fighter.py` resolve a cinemática e grava, para cada pose, direção e parte, o registro pronto para o geo3d: 9 palavras de matriz e 3 de translação, 24 bytes.
@@ -88,7 +89,7 @@ Passadas por quadro no giro: o ringue, a passada que esconde, e uma só passada 
 - **Giro de abertura:** 120 quadros de 30 bytes (registro de câmera e luz). A câmera dá uma volta completa, desce de 38° para 24° e aproxima de 1150 para 560 unidades. O último quadro é exatamente a câmera de luta.
 - **Cores:** rampas de 7 tons na paleta de 256. O geo3d soma o nível de luz à cor base da face.
 
-Limites atuais: 122 de 124 poses nos dois bancos, e os vértices estão a 2 do teto do geo3d. A ROM tem 256 KB: 10 bancos usados e 6 livres.
+Limites atuais: 122 de 124 poses nos dois bancos; 869 de 1.023 vértices e 792 de 1.023 faces. A ROM tem 256 KB: 11 bancos usados (0 código, 1 abertura e ringue, 2 a 9 poses, 10 vértices e faces da cena) e 5 livres. O tamanho das poses não depende dos vértices: cada parte continua com um registro de 24 bytes por pose.
 
 ## 6. Jogabilidade do demo
 
@@ -122,7 +123,7 @@ O que cada altura faz:
 
 ## 7. Limitações conhecidas
 
-- Mais polígonos nos lutadores exigem mudar a técnica: o geo3d guarda no máximo 255 vértices e 255 faces de uma vez, e a cena já usa 253 e 200.
+- O jogo exige o geo3d v2.0, que ainda não é o firmware oficial do V9968 (é o v1.0.0) e não rodou em hardware. Sobram 154 vértices e 231 faces para cenário ou detalhe.
 - Na luta a câmera desliza, mas não gira nem aproxima. O giro do eixo é o ringue girando; o piso em volta é liso, então não denuncia o truque, mas um cenário com fundo desenhado vai precisar girar junto.
 - Os lutadores não trocam de lado, não pulam um por cima do outro e não agarram.
 - Quem leva um golpe no ar ou agachado passa direto para a animação de golpe recebido em pé.
@@ -139,9 +140,9 @@ O que cada altura faz:
 | 6 personagens | Mesma estrutura de 11 partes; cada um com medidas, cores e golpes próprios. A seleção de personagem carrega vértices e faces dos dois escolhidos |
 | 8 cenários | O ringue continua 3D ao vivo, com ladrilhos e saia de cores próprias. Elementos de fundo desenhados uma vez pelo geo3d em páginas ocultas e copiados por HMMM |
 | Mais golpes | Já são dois bancos de poses por personagem e direção, quase cheios; agarrões e golpes próprios de cada personagem pedem um terceiro |
-| Mais polígonos | Desenhar o ringue numa etapa própria, com os vértices trocados a cada quadro (cerca de 1,7 ms de Z80), libera 13 vértices; além disso, só reenviando vértices e faces por quadro, o que custa a taxa de quadros |
+| Mais polígonos | Feito com o geo3d v2.0 (420 vértices por lutador). Sobram 154 vértices e 231 faces da cena para cenário; personagens maiores cabem trocando o ringue por um piso mais simples |
 | Câmeras de replay e de vitória | Mesma técnica do giro: um conjunto de vértices no mundo e uma tabela de registros de câmera |
-| Troca de lado | Reenviar as faces dos dois lutadores com as normais da outra direção: 192 faces, cerca de 12 ms, uma vez |
+| Troca de lado | Reenviar as faces dos dois lutadores com as normais da outra direção: 772 faces de 12 bytes, cerca de 60 ms com OTIR, uma vez |
 | 2 jogadores | Ler o joystick 2; o lutador 1 já aceita ficar sem a máquina |
 | Som | Efeitos no PSG já existem; música pelo tocador de fluxos do VECTOR RAID |
 | Tamanho da ROM | Cerca de 6 bancos por personagem com o dobro de golpes: 36 bancos mais cenários, dentro de 1 MB |

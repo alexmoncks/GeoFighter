@@ -7,13 +7,16 @@
 ; on the keyboard or joystick 1 against the machine, or the machine against
 ; itself).
 ;
+; It needs geo3d v2.0 (the scene has more than 255 vertices and faces);
+; with an older geo3d it says so and stops.
+;
 ; MSX MegaROM, ASCII16 mapper, 256 KB:
 ;   bank 0   page 1 (4000h-7FFFh), fixed: all the code, the animation table,
 ;            the sounds
-;   bank 1   page 2 (8000h-BFFFh) at boot: the palette, the vertices and the
-;            faces of the scene, the opening shot (its vertices, its camera)
-;            and the ring under a turned axis
+;   bank 1   page 2 (8000h-BFFFh) at boot: the palette, the opening shot (its
+;            vertices, its camera) and the ring under a turned axis
 ;   bank 2+  the poses: two banks per character and facing, POSE_BYTES per pose
+;   bank 10  the vertices and the faces of the scene (MODEL_BANK)
 ; Ports come from out/ports.asm (build.sh): PORT_BASE 98h (openMSX: the
 ; V9968 is the machine's VDP) or 88h (the V9968 cartridge next to the
 ; internal VDP). geo3d sits at PORT_BASE + 5 (index/status) and + 7 (data).
@@ -43,6 +46,7 @@ VDP_IND:    equ PORT_BASE + 3
 VDP_P4:     equ PORT_BASE + 4
 GEO_IDX:    equ PORT_BASE + 5
 GEO_DAT:    equ PORT_BASE + 7
+GEO3D_AW:   equ 10              ; geo3d's RAMs must have 2^10 entries (XCTRL bits 7-4)
 
 PPI_B:      equ 0xA9
 PPI_C:      equ 0xAA
@@ -143,6 +147,7 @@ init:
         cp 0xFF
         jp z, no_geo
         call geo_init
+        jp nz, old_geo
         call msg_prep
         ; the interrupt handler (H.KEYI: every interrupt, before the BIOS)
         ld a, 0xC3
@@ -160,8 +165,16 @@ main_loop:
         call game_run
         jr main_loop
 
-; no geo3d at PORT_BASE + 5: say so and stop
+; no geo3d at PORT_BASE + 5, or one older than v2.0: say so and stop
 no_geo:
+        ld hl, s_nogeo
+        ld de, 96 * 256 + 48
+        jr ng_0
+old_geo:
+        ld hl, s_oldgeo
+        ld de, 96 * 256 + 44
+ng_0:   push hl
+        push de
         ld a, 0x40                  ; display on, no interrupt
         ld b, 1
         call wreg
@@ -172,12 +185,14 @@ no_geo:
         ld (txt_fg), a
         ld a, 1
         ld (txt_scale), a
-        ld hl, s_nogeo
-        ld de, 96 * 256 + 48
+        pop de
+        pop hl
         call txt_put
 ng_1:   jr ng_1
 s_nogeo:
         db "GEO3D NAO ENCONTRADO", 0
+s_oldgeo:
+        db "GEO3D V2.0 NECESSARIO", 0
 
         include "src/vdp.asm"
         include "src/math.asm"
@@ -192,13 +207,11 @@ bank0_end:
         ds 0x8000 - $, 0xFF
 
 ; ============================================================================
-; bank 1: the palette and the scene's vertices and faces
+; bank 1: the palette, the opening shot, the ring under a turned axis
 ; ============================================================================
         org 0x8000
 palette:
         incbin "out/palette.bin"
-models:                             ; the fight's vertices, then the faces
-        incbin "out/models.bin"
 vtx_intro:                          ; the opening shot's vertices
         incbin "out/vtx_intro.bin"
 orbit_tab:                          ; ... and its camera, ORBIT_REC bytes a frame
@@ -236,9 +249,14 @@ bank1_end:
         org 0x8000
         incbin "out/pose_1_1_1.bin"
         ds 0xC000 - $, 0xFF
-; banks 10..15: free (the ROM is 256 KB)
+; ============================================================================
+; bank 10 (MODEL_BANK): the scene's vertices (VTX_BYTES), then its faces
+; (FACE_BYTES, geo3d v2.0's 12-byte format)
+; ============================================================================
         org 0x8000
-        ds 0x4000, 0xFF
+        incbin "out/models.bin"
+        ds 0xC000 - $, 0xFF
+; banks 11..15: free (the ROM is 256 KB)
         org 0x8000
         ds 0x4000, 0xFF
         org 0x8000

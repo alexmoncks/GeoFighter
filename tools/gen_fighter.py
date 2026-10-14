@@ -155,6 +155,53 @@ def tube(rings, sides, caps):
         f.append(([top, top + 1, top + 2, top + 3], caps[1], mid))
     return v, f
 
+OCT = 8                 # sides of the rounded tubes (geo3d v2.0 holds 1023 vertices)
+
+def side_colour(sides, k, n):
+    """the colour of side k of n: one colour, or [front, back, left, right];
+    a side between two of those takes the front's or the back's"""
+    if not isinstance(sides, (list, tuple)):
+        return sides
+    a = (360.0 * k / n) % 360.0                 # the direction the side faces
+    if a < 45.0 or a > 315.0:
+        return sides[0]
+    if 135.0 < a < 225.0:
+        return sides[1]
+    if a == 90.0:
+        return sides[2]
+    if a == 270.0:
+        return sides[3]
+    return sides[0] if (a < 90.0 or a > 270.0) else sides[1]
+
+def otube(rings, sides, caps):
+    """A rounded tube: octagons sharing their vertices, rings = [(y, hx, hz,
+    cx)] from the bottom up, each octagon as wide as the rectangle of tube()
+    (its flat sides touch x = cx +- hx and z = +- hz). Side k faces 45 * k
+    degrees from the front (+x) towards the left (+z). sides: one colour per
+    segment, or [front, back, left, right]; caps: (bottom, top), None for
+    none; a cap is 3 quads."""
+    n = OCT
+    s = 1.0 / math.cos(math.pi / n)
+    v = []
+    for y, hx, hz, cx in rings:
+        for k in range(n):
+            t = 2.0 * math.pi * (k - 0.5) / n
+            v.append([cx + hx * s * math.cos(t), y, hz * s * math.sin(t)])
+    f = []
+    for r in range(len(rings) - 1):
+        a, b = n * r, n * r + n
+        axis = [(rings[r][3] + rings[r + 1][3]) / 2.0, (rings[r][0] + rings[r + 1][0]) / 2.0, 0.0]
+        for k in range(n):
+            k1 = (k + 1) % n
+            f.append(([a + k, a + k1, b + k1, b + k], side_colour(sides[r], k, n), axis))
+    mid = [sum(q[3] for q in rings) / len(rings), (rings[0][0] + rings[-1][0]) / 2.0, 0.0]
+    for c, base in ((caps[0], 0), (caps[1], n * (len(rings) - 1))):
+        if c is not None:
+            o = lambda i: base + i
+            f += [([o(0), o(1), o(2), o(3)], c, mid), ([o(0), o(3), o(4), o(7)], c, mid),
+                  ([o(4), o(5), o(6), o(7)], c, mid)]
+    return v, f
+
 def wedge(x0, x1, xt, y0, y1, hz, col):
     """A foot: the sole from x0 to x1 at y0, rising to an edge at (xt, y1)."""
     v = [[x0, y0, -hz], [x1, y0, -hz], [x1, y0, hz], [x0, y0, hz], [xt, y1, -hz], [xt, y1, hz]]
@@ -195,28 +242,48 @@ def make_character(spec):
     sh_z = 19.0 * w
     hip_z = 8.5 * w
     parts = {}
-    parts["pelvis"] = build_part([tube([(-12, 9 * w, 11 * w, 0), (9, 10 * w, 13 * w, 0)],
-                                       [c["pelvis"]], (c["pelvis"], c["pelvis"]))])
-    # the waist, the ribs, the chest (the deepest), the shoulders (the widest)
-    parts["torso"] = build_part([tube(
-        [(0, 9.5 * w, 12.0 * w, 0.0), (7, 9.8 * w, 12.6 * w, 0.5),
-         (th * 0.66, 12.5 * w, 16.0 * w, 2.5), (th, 9.0 * w, sh_z + 1.5, 1.0)],
-        [c["belt"], c["torso"], c["torso"]], (c["belt"], c["torso"]))])
-    # the jaw, the cheeks, the crown
-    parts["head"] = build_part([tube(
-        [(1, 6.0, 5.6, 2.0), (11, 9.2, 8.4, 1.2), (27, 8.0, 7.6, 0.4)],
-        [c["jaw"], c["face"]], (c["skin"], c["crown"]))])
+    # rounded (octagonal) tubes, with more rings than the boxes of the first
+    # demo: the same outline, now with a belly, a chest, a neck, cheeks, a
+    # forehead, a biceps, a calf
+    parts["pelvis"] = build_part([otube(
+        [(-12, 9.0 * w, 11.0 * w, 0), (-3, 10.0 * w, 12.6 * w, 0), (9, 10.0 * w, 13.0 * w, 0)],
+        [c["pelvis"], c["pelvis"]], (c["pelvis"], c["pelvis"]))])
+    # the waist, the belt, the belly, the chest (the deepest), the shoulders
+    # (the widest), the trapezius
+    parts["torso"] = build_part([otube(
+        [(0, 9.4 * w, 11.8 * w, 0.0), (6, 9.8 * w, 12.4 * w, 0.5), (th * 0.35, 10.6 * w, 13.6 * w, 1.4),
+         (th * 0.62, 12.4 * w, 15.8 * w, 2.6), (th * 0.86, 11.2 * w, sh_z + 0.5, 2.0),
+         (th, 7.4 * w, sh_z - 4.0 * w, 1.0)],
+        [c["belt"], c["torso"], c["torso"], c["torso"], c["torso"]], (c["belt"], c["torso"]))])
+    # the neck, the chin, the jaw, the cheeks, the temples, the forehead, the crown
+    parts["head"] = build_part([otube(
+        [(-1, 3.8, 3.8, 0.5), (3, 4.2, 4.0, 0.8), (5, 6.0, 5.4, 2.2), (11, 8.6, 7.8, 1.6),
+         (18, 9.0, 8.4, 1.0), (24, 8.2, 7.8, 0.4), (28.5, 5.6, 5.4, 0.0)],
+        [c["skin"], c["skin"], c["jaw"], c["face"], c["face"], c["crown"]], (c["skin"], c["crown"]))])
     for s in ("l", "r"):
-        parts["uarm_" + s] = build_part([tube(
-            [(-arm_u, 5.0 * w, 5.0 * w, 0), (2, 6.5 * w, 6.5 * w, 0)], [c["uarm"]], (c["uarm"], c["uarm"]))])
-        # the fist (wide), the wrist (thin), the elbow
-        parts["farm_" + s] = build_part([tube(
-            [(-arm_f - 4, 6.0 * w, 6.0 * w, 0), (-arm_f + 7, 4.2 * w, 4.2 * w, 0), (1, 5.4 * w, 5.4 * w, 0)],
-            [c["fist"], c["farm"]], (c["fist"], c["farm"]))])
-        parts["thigh_" + s] = build_part([tube(
-            [(-leg_t, 6.5 * w, 6.2 * w, 0), (3, 8.8 * w, 7.8 * w, 0)], [c["thigh"]], (c["thigh"], c["thigh"]))])
+        # the elbow, the biceps, the shoulder
+        parts["uarm_" + s] = build_part([otube(
+            [(-arm_u, 4.6 * w, 4.6 * w, 0), (-arm_u * 0.55, 5.6 * w, 5.6 * w, 0.6),
+             (-arm_u * 0.15, 6.2 * w, 6.0 * w, 0.3), (2, 6.6 * w, 6.4 * w, 0)],
+            [c["uarm"]] * 3, (c["uarm"], c["uarm"]))])
+        # the wrist (thin), the forearm, the elbow; the fist, a block
+        parts["farm_" + s] = build_part([
+            otube([(-arm_f + 5, 4.0 * w, 4.2 * w, 0), (-arm_f * 0.45, 5.4 * w, 5.2 * w, 0.4),
+                   (-4, 5.6 * w, 5.4 * w, 0.2), (1, 5.0 * w, 5.0 * w, 0)],
+                  [c["farm"]] * 3, (None, c["farm"])),
+            tube([(-arm_f - 5, 5.4 * w, 5.0 * w, 0.5), (-arm_f + 1, 6.2 * w, 5.6 * w, 0.3),
+                  (-arm_f + 6, 4.6 * w, 4.4 * w, 0)],
+                 [c["fist"], c["fist"]], (c["fist"], c["fist"]))])
+        # the knee, the thigh, the hip
+        parts["thigh_" + s] = build_part([otube(
+            [(-leg_t, 6.2 * w, 6.0 * w, 0.5), (-leg_t * 0.5, 7.8 * w, 7.2 * w, 1.2),
+             (-leg_t * 0.15, 8.6 * w, 7.8 * w, 0.6), (3, 8.8 * w, 8.0 * w, 0)],
+            [c["thigh"]] * 3, (c["thigh"], c["thigh"]))])
+        # the ankle, the calf (behind), the knee; the foot
         parts["shin_" + s] = build_part([
-            tube([(-leg_s, 4.8 * w, 4.6 * w, 0), (2, 6.6 * w, 6.2 * w, 0)], [c["shin"]], (c["shin"], c["shin"])),
+            otube([(-leg_s, 4.4 * w, 4.4 * w, 0), (-leg_s * 0.55, 5.6 * w, 5.4 * w, -0.6),
+                   (-leg_s * 0.2, 6.4 * w, 6.0 * w, -1.0), (2, 6.4 * w, 6.0 * w, 0)],
+                  [c["shin"]] * 3, (c["shin"], c["shin"])),
             wedge(-7.0, 17.0, 0.0, -leg_s - 7, -leg_s + 2, 5.4 * w, c["foot"])])
     joints = {                      # the joint of each part in its parent's frame
         "torso": ("pelvis", (0, 9, 0)),
@@ -455,9 +522,13 @@ REC = 24                           # bytes per part: 9 matrix words, 3 translati
 POSE_BYTES = REC * NPARTS
 
 # ------------------------------------------------------------------ the ring
+RING_TILES = 4          # tiles along each side of the ring's top
+
 def build_ring():
-    """a square platform: 2 x 2 tiles on top, a skirt on each side"""
-    xs = [-RING, 0, RING]
+    """a square platform: RING_TILES x RING_TILES tiles on top, a skirt on
+    each side"""
+    t = RING_TILES
+    xs = [-RING + 2.0 * RING * i / t for i in range(t + 1)]
     verts = [[x, 0.0, z] for z in xs for x in xs]
     faces, normals, cols = [], [], []
     def add(f, n, col):
@@ -465,16 +536,17 @@ def build_ring():
         if dot(cross(vsub(p[1], p[0]), vsub(p[2], p[0])), n) < 0:
             f = [f[0], f[3], f[2], f[1]]
         faces.append(f); normals.append(n); cols.append(col)
-    for j in range(2):
-        for i in range(2):
-            a = j * 3 + i
-            add([a, a + 1, a + 4, a + 3], [0.0, 1.0, 0.0], R("tile_a") if (i + j) % 2 == 0 else R("tile_b"))
+    for j in range(t):
+        for i in range(t):
+            a = j * (t + 1) + i
+            add([a, a + 1, a + t + 2, a + t + 1], [0.0, 1.0, 0.0], R("tile_a") if (i + j) % 2 == 0 else R("tile_b"))
+    c00, c10, c01, c11 = 0, t, t * (t + 1), (t + 1) * (t + 1) - 1      # the top's corners
     b = len(verts)
     verts += [[-RING, -RING_H, -RING], [RING, -RING_H, -RING], [RING, -RING_H, RING], [-RING, -RING_H, RING]]
-    add([0, 2, b + 1, b], [0.0, 0.0, -1.0], R("skirt"))
-    add([2, 8, b + 2, b + 1], [1.0, 0.0, 0.0], R("skirt"))
-    add([8, 6, b + 3, b + 2], [0.0, 0.0, 1.0], R("skirt"))
-    add([6, 0, b, b + 3], [-1.0, 0.0, 0.0], R("skirt"))
+    add([c00, c10, b + 1, b], [0.0, 0.0, -1.0], R("skirt"))
+    add([c10, c11, b + 2, b + 1], [1.0, 0.0, 0.0], R("skirt"))
+    add([c11, c01, b + 3, b + 2], [0.0, 0.0, 1.0], R("skirt"))
+    add([c01, c00, b, b + 3], [-1.0, 0.0, 0.0], R("skirt"))
     return verts, faces, normals, cols
 
 # ------------------------------------------------------------------ output
@@ -529,13 +601,19 @@ def main():
     nvert = len(vfight)
     ring_faces = [([nv_fight + i for i in f], mvec(C0, n), c) for f, n, c in zip(rf, rn, rc)]
     all_faces = ring_faces + fighter_faces[0] + fighter_faces[1]
-    assert nvert <= 255 and len(all_faces) <= 255, (nvert, len(all_faces))
+    assert nvert <= 1023 and len(all_faces) <= 1023, (nvert, len(all_faces))   # geo3d v2.0
+    assert max(b - a for rr in ranges for a, b in rr) <= 255           # NVERT of a part: one byte
 
     pack_v = lambda vs: b"".join(struct.pack("<3h", s16(x), s16(y), s16(z)) for x, y, z in vs)
     vbin = pack_v(vfight)
+    # geo3d v2.0's extended face stream: I0..I3 (low bytes), their high bits
+    # (2 each, I0 in bits 1-0), NX NY NZ, BASE: 12 bytes
     fbin = b""
     for idx, n, c in all_faces:
-        fbin += bytes(idx) + struct.pack("<3h", q14(n[0]), q14(n[1]), q14(n[2])) + bytes([c])
+        hi = sum((i >> 8) << (2 * k) for k, i in enumerate(idx))
+        fbin += bytes(i & 0xFF for i in idx) + bytes([hi]) + \
+            struct.pack("<3h", q14(n[0]), q14(n[1]), q14(n[2])) + bytes([c])
+    assert len(vbin) + len(fbin) <= 16384, len(vbin) + len(fbin)       # one bank: MODEL_BANK
     with open(os.path.join(OUT, "models.bin"), "wb") as f:
         f.write(vbin + fbin)
     with open(os.path.join(OUT, "vtx_intro.bin"), "wb") as f:
@@ -615,9 +693,12 @@ def main():
         w("; generated by tools/gen_fighter.py")
         w("ROM_BANKS:   equ 16")
         w("POSE_BANK0:  equ 2               ; + 2 * (2 * character + facing) + (pose >= POSES_BANK)")
+        w("MODEL_BANK:  equ 10              ; the fight's vertices, then the faces")
         for k, v in (("G3_W", G3_W), ("G3_H", G3_H), ("G3_F", G3_F), ("G3_CX", G3_CX), ("G3_CY", G3_CY),
                      ("G3_ZNEAR", G3_ZNEAR), ("VIEW_Y0", VIEW_Y0), ("NVERT_ALL", nvert), ("NVERT_FIGHT", nv_fight),
-                     ("NFACE_ALL", len(all_faces)), ("NFACE_RING", len(ring_faces)), ("NPARTS", NPARTS),
+                     ("NVERT_RING", nvert - nv_fight), ("NFACE_ALL", len(all_faces)),
+                     ("NFACE_RING", len(ring_faces)), ("NFACE_FIGHT", len(all_faces) - len(ring_faces)),
+                     ("NPARTS", NPARTS),
                      ("POSE_REC", REC), ("POSE_BYTES", POSE_BYTES), ("VTX_BYTES", len(vbin)),
                      ("FACE_BYTES", len(fbin)), ("ORBIT_N", ORBIT_N), ("ORBIT_REC", 30),
                      ("KVEC_X", q14(KVEC[0])), ("KVEC_Y", q14(KVEC[1])), ("KVEC_Z", q14(KVEC[2])),
@@ -639,10 +720,12 @@ def main():
     with open(os.path.join(OUT, "inc", "tables.asm"), "w") as f:
         w = lambda s: f.write(s + "\n")
         w("; generated by tools/gen_fighter.py")
-        w("; the end of each part's vertex range, per slot")
+        w("; each part's vertices, per slot: the first one (a word), how many (a byte)")
         for slot in (0, 1):
-            w("part_end_%d:" % slot)
-            w("        db " + ", ".join(str(ranges[slot][i][1]) for i in range(NPARTS)))
+            w("part_v_%d:" % slot)
+            for i in range(NPARTS):
+                a, b = ranges[slot][i]
+                w("        dw %d\n        db %d          ; %s" % (a, b - a, PARTS[i]))
         w("ring_t0:                        ; the ring's translation under the fight camera")
         w("        dw " + ", ".join(str(v) for v in ring_rec[9:]))
         w("; moves: animation, hit step, reach, damage, height")

@@ -21,7 +21,7 @@
 # Windows paths) or a Linux build. Writes out/test/<scenario>/ (log.txt,
 # PNGs). Exit 1 on a failure.
 cd "$(dirname "$0")/.."
-OPENMSX=${OPENMSX:-/mnt/c/Projects/mmsoft/openmsx-geo3d/openmsx.exe}
+OPENMSX=${OPENMSX:-/mnt/c/Projects/mmsoft/openmsx-geo3d/openmsx_geo3d_v2.exe}
 PROFILE=${PROFILE:-98}
 [ -f out/GEOFIGHTER_$PROFILE.ROM ] || { echo "build first (build.sh)"; exit 2; }
 if [ "$PROFILE" = 88 ]; then
